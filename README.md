@@ -38,3 +38,4 @@ In linux, `auditwheel` is used for creating python wheel packages ocntains
 precompiled binary extensions.
 Header locations and link flags can be customized by `GAMMA_INCLUDE` and
 `GAMMA_LDFLAGS` environment variables for building wheel packages.
+Windows and OSX are not supported yet.
