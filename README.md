@@ -7,11 +7,11 @@ gamma python sdk and python wheel packages.
 This repository shows gamma python sdk and provides scripts to create wheel
 packages for the gamma library.
 
-[python sdk api](./docs/APIPythonSDK.md) is the document of python sdk aip.
+[python sdk api](./docs/APIPythonSDK.md) is the document of python sdk api.
 Files in directory of python shows how the python sdk encapsulate gamma.
 setup.py is written for creating wheel packages for gamma.
 
-Of curse, pip install vearch is the easiest way to use this python sdk. And
+Of course, pip install vearch is the easiest way to use this python sdk. And
 this repository helps to build your custom python sdk.
 
 ## Building source package
