@@ -19,49 +19,159 @@ typedef int64_t size_t;
 #include "gamma_api.h"
 %}
 
-%ignore ResponseCode;
-%ignore DistanceMetricType;
-%ignore DataType;
-%ignore IndexStatus;
-%ignore SearchResultCode;
-
-%ignore Init;
-%ignore Close;
-
 %include "gamma_api.h"
 
-%inline %{
-struct ResponseCodes {
-    enum { SUCCESSED = 0, FAILED = 1 };
-};
-%}
 
-%inline %{
-struct DistanceMetricTypes {
-    enum { InnerProduct = 0, L2  };
-};
-%}
-
-%inline %{
-struct DataTypes {
-    enum { INT = 0, LONG = 1, FLOAT = 2, DOUBLE = 3, STRING = 4, VECTOR = 5 };
-};
-%}
-
-%inline %{
-struct IndexStatuses {
-    enum { UNINDEXED = 0, INDEXING, INDEXED };
-};
-%}
-
-%inline %{
-struct SearchResultCodes {
-    enum { SUCCESS = 0, INDEX_NOT_TRAINED, SEARCH_ERROR };
-};
-%}
 
 %include <std_string.i>
 %include <std_vector.i>
+#include "gamma_api.h"
+#include <stdio.h>
+#include <vector>
+#include <stdlib.h>
+%inline%{
+    void *swigInitEngine(unsigned char *pConfig, int len){
+        char* config_str = (char*)pConfig;
+        void* engine = Init(config_str, len);
+        return engine;
+    }
+
+    int swigClose(void *engine){
+        int res = Close(engine);
+        return res;
+    }
+
+    int swigCreateTable(void *engine, unsigned char *pTable, int len){
+        char *table_str = (char*)pTable;
+        return CreateTable(engine, table_str, len);
+    }
+
+    int swigAddOrUpdateDoc(void *engine, unsigned char *pDoc, int len){
+        char *doc_str = (char*)pDoc; 
+        return AddOrUpdateDoc(engine, doc_str, len);
+    }
+
+    int swigUpdateDoc(void *engine, unsigned char *pDoc, int len){
+        char *doc_str = (char*)pDoc;
+        return UpdateDoc(engine, doc_str, len);
+    }
+   
+
+    int swigDeleteDoc(void *engine,unsigned char *docid, int len){
+        char *doc_id = (char*)docid;
+        return DeleteDoc(engine, doc_id, len);
+    }
+
+    std::vector<unsigned char> swigGetEngineStatus(void *engine){
+        char *status_str = NULL;
+        int len = 0;
+        GetEngineStatus(engine, &status_str, &len);
+        std::vector<unsigned char> vec_status(len);
+        memcpy(vec_status.data(), status_str, len);
+        free(status_str);
+        status_str = NULL;
+        return vec_status;
+    }
+
+    std::vector<unsigned char> swigGetDocByID(void *engine, char *docid, int docid_len){
+        char *doc_id = (char*)docid;
+        char *doc_str = NULL;
+        int len = 0;
+        int res = GetDocByID(engine, doc_id, docid_len, &doc_str, &len);
+        if(res == 0){
+            std::vector<unsigned char> vec_doc(len);
+            memcpy(vec_doc.data(), doc_str, len);
+            free(doc_str);
+            doc_str = NULL;
+            return vec_doc;
+        }
+        else{
+            std::vector<unsigned char> vec_doc(1);
+            return vec_doc;
+        }
+    }
+    
+    std::vector<unsigned char> swigGetDocByDocID(void *engine, int docid){
+        char *doc_str = NULL;
+        int len = 0;
+        int res = GetDocByDocID(engine, docid, &doc_str, &len);
+        if(res == 0){
+            std::vector<unsigned char> vec_doc(len);
+            memcpy(vec_doc.data(), doc_str, len);
+            free(doc_str);
+            doc_str = NULL;
+            return vec_doc;
+        }
+        else{
+            std::vector<unsigned char> vec_doc(1);
+            return vec_doc;
+        }
+    }
+
+    int swigBuildIndex(void* engine){
+        return BuildIndex(engine);
+    }
+
+    int swigDump(void* engine){
+        return Dump(engine);
+    }
+
+    int swigLoad(void* engine){
+        return Load(engine);
+    }
+
+    std::vector<unsigned char> swigSearch(void* engine, unsigned char* pRequest, int req_len){
+        char* request_str = (char*)pRequest;
+        char* response_str = NULL;
+        int res_len = 0;
+        int code_response = Search(engine, request_str, req_len, &response_str, &res_len);
+        if(code_response == 0){    
+            std::vector<unsigned char> vec_res(res_len);
+            memcpy(vec_res.data(), response_str, res_len);
+            free(response_str);
+            response_str = NULL;
+            return vec_res;
+        }else{
+            std::vector<unsigned char> vec_res(1);
+            return vec_res;
+        }
+    }
+
+    int swigDelDocByQuery(void* engine, unsigned char *pRequest, int len){
+        char* request_str = (char*)pRequest;
+        return DelDocByQuery(engine, request_str, len);
+    }
+    
+    unsigned char* swigGetVectorPtr(std::vector<unsigned char> &v){
+        return v.data();
+    }
+%}
+
+
+void *memcpy(void *dest, const void *src, size_t n);
+
+
+/*******************************************************************
+ * Types of vectors we want to manipulate at the scripting language
+ * level.
+ *******************************************************************/
+// simplified interface for vector
+namespace std {
+
+    template<class T>
+    class vector {
+    public:
+        vector();
+        void push_back(T);
+        void clear();
+        T * data();
+        size_t size();
+        T at (size_t n) const;
+        void resize (size_t n);
+        void swap (vector<T> & other);
+    };
+};
+
 
 %template(IntVector) std::vector<int>;
 %template(LongVector) std::vector<long>;
@@ -70,178 +180,6 @@ struct SearchResultCodes {
 %template(UCharVector) std::vector<unsigned char>;
 %template(FloatVector) std::vector<float>;
 %template(DoubleVector) std::vector<double>;
-
-
-const std::string ByteArrayToString(ByteArray *value);
-
-template <typename T>
-std::vector<T> ByteArrayToVector(ByteArray *value);
-
-template <typename T>
-T ByteArrayToType(ByteArray *value);
-
-template <typename T>
-ByteArray * TypeToByteArray(T value);
-
-ByteArray *StringToByteArray(const std::string &str);
-
-template <typename T>
-ByteArray *PointerToByteArray(const T *feature, int dimension);
-
-Config *MakeConfig(const std::string &path, int max_doc_size);
-
-VectorInfo *MakeVectorInfo(const std::string &name, int data_type,
-                           BOOL is_index, int dimension, 
-                           const std::string &model_id,
-                           const std::string &retrieval_type, 
-                           const std::string &store_type,
-                           const std::string &store_param);
-
-std::vector<unsigned char> ByteArrayToByteVector(ByteArray *value);
-/*
-FieldInfo *MakeFieldInfo(ByteArray *name, int data_type,
-                         BOOL is_index);
-*/
-
-Field *MakeField(ByteArray *name, ByteArray *value,
-                 enum DataType data_type);
-
-%rename(InitEngine) Init;
-extern void *Init(Config *config);
-
-%rename(CloseEngine) Close;
-extern enum ResponseCode Close(void *engine);
-
-%{
-
-const std::string ByteArrayToString(ByteArray * value) {
-  assert(value != nullptr);
-  return std::string(value->value, value->len);
-}
-
-template <typename T>
-T ByteArrayToType(ByteArray * value) {
-  assert(value != nullptr);
-  T data = 0;
-  memcpy(&data, value->value, value->len);
-  return data;
-}
-
-template <typename T>
-ByteArray * TypeToByteArray(T value) {
-  ByteArray *ba = static_cast<ByteArray *>(malloc(sizeof(ByteArray)));
-  ba->len = sizeof(T);
-  ba->value = static_cast<char *>(malloc(ba->len * sizeof(char)));
-  memcpy(ba->value, &value, ba->len);
-  return ba;  
-}
-
-template <typename T>
-std::vector<T> ByteArrayToVector(ByteArray *value) {
-  int len = value->len / sizeof(T) - 1;
-  std::vector<T> vec(len);
-  memcpy(vec.data(), value->value + sizeof(int), value->len);
-  return vec;
-}
-
-std::vector<unsigned char> ByteArrayToByteVector(ByteArray *value) {
-  int len = value->len / sizeof(unsigned char);
-  std::vector<unsigned char> vec(len);
-  memcpy(vec.data(), value->value, value->len);
-  return vec;
-}
-
-ByteArray *StringToByteArray(const std::string &str) {
-  ByteArray *ba = static_cast<ByteArray *>(malloc(sizeof(ByteArray)));
-  ba->len = str.length();
-  ba->value = static_cast<char *>(malloc((str.length()) * sizeof(char)));
-  memcpy(ba->value, str.data(), str.length());
-  return ba;
-}
-
-template <typename T>
-ByteArray *PointerToByteArray(const T *feature, int dimension) {
-  ByteArray *ba = static_cast<ByteArray *>(malloc(sizeof(ByteArray)));
-  ba->len = dimension * sizeof(T);
-  ba->value = static_cast<char *>(malloc(ba->len));
-  memcpy((void *)ba->value, (void *)feature, ba->len);
-  return ba;
-}
-
-Config *MakeConfig(const std::string &path, int max_doc_size) {
-    ByteArray *ba = StringToByteArray(path);
-    
-    Config *config = static_cast<Config *>(malloc(sizeof(Config)));
-    memset(config, 0, sizeof(Config));
-    config->path = ba;
-    config->max_doc_size = max_doc_size;
-    return config;
-}
-
-VectorInfo *MakeVectorInfo(const std::string &name, int data_type,
-                           BOOL is_index, int dimension, const std::string &model_id,
-                           const std::string &retrieval_type, const std::string &store_type,
-                           const std::string &store_param) {
-  ByteArray *ba_name = StringToByteArray(name);
-  ByteArray *ba_model_id = StringToByteArray(model_id);
-  ByteArray *ba_retrieval_type = StringToByteArray(retrieval_type);
-  ByteArray *ba_store_type = StringToByteArray(store_type);
-  ByteArray *ba_store_param = StringToByteArray(store_param);
-
-  VectorInfo *vectorInfo =
-      static_cast<VectorInfo *>(malloc(sizeof(VectorInfo)));
-  memset(vectorInfo, 0, sizeof(VectorInfo));
-  vectorInfo->name = ba_name;
-  vectorInfo->data_type = static_cast<enum DataType>(data_type);
-  vectorInfo->is_index = is_index;
-  vectorInfo->dimension = dimension;
-  vectorInfo->model_id = ba_model_id;
-  vectorInfo->retrieval_type = ba_retrieval_type;
-  vectorInfo->store_type = ba_store_type;
-  vectorInfo->store_param = ba_store_param;
-  return vectorInfo;
-}
-
-Field *MakeField(ByteArray *name, ByteArray *value,
-                 enum DataType data_type) {
-  Field *field_info = static_cast<Field *>(malloc(sizeof(Field)));
-  memset(field_info, 0, sizeof(Field));
-  field_info->name = name;
-  field_info->data_type = data_type;
-  field_info->value = value;
-  field_info->source = StringToByteArray("");
-  return field_info;
-}
-
-%}
-
-%template(FloatsToByteArray) PointerToByteArray<float>;
-%template(BytesToByteArray) PointerToByteArray<unsigned char>;
-%template(CharsToByteArray) PointerToByteArray<char>;
-%template(IntsToByteArray) PointerToByteArray<int>;
-%template(UInt64sToByteArray) PointerToByteArray<unsigned long>;
-%template(LongsToByteArray) PointerToByteArray<long>;
-%template(DoublesToByteArray) PointerToByteArray<double>;
-
-%template(FloatToByteArray) TypeToByteArray<float>;
-%template(ByteToByteArray) TypeToByteArray<unsigned char>;
-%template(CharToByteArray) TypeToByteArray<char>;
-%template(IntToByteArray) TypeToByteArray<int>;
-%template(UInt64ToByteArray) TypeToByteArray<unsigned long>;
-%template(LongToByteArray) TypeToByteArray<long>;
-%template(DoubleToByteArray) TypeToByteArray<double>;
-
-%template(ByteArrayToInt) ByteArrayToType<int>;
-%template(ByteArrayToLong) ByteArrayToType<long>;
-%template(ByteArrayToFloat) ByteArrayToType<float>;
-%template(ByteArrayToDouble) ByteArrayToType<double>;
-
-%template(ByteArrayToIntVector) ByteArrayToVector<int>;
-%template(ByteArrayToLongVector) ByteArrayToVector<long>;
-%template(ByteArrayToULongVector) ByteArrayToVector<unsigned long>;
-%template(ByteArrayToCharVector) ByteArrayToVector<char>;
-%template(ByteArrayToFloatVector) ByteArrayToVector<float>;
-%template(ByteArrayToDoubleVector) ByteArrayToVector<double>;
 
 /*******************************************************************
  * Python specific: numpy array <-> C++ pointer interface
@@ -264,9 +202,9 @@ PyObject *swig_ptr (PyObject *a)
     if(PyArray_TYPE(ao) == NPY_FLOAT32) {
         return SWIG_NewPointerObj(data, SWIGTYPE_p_float, 0);
     }
-    if(PyArray_TYPE(ao) == NPY_FLOAT64) {
-        return SWIG_NewPointerObj(data, SWIGTYPE_p_double, 0);
-    }
+    //if(PyArray_TYPE(ao) == NPY_FLOAT64) {
+    //    return SWIG_NewPointerObj(data, SWIGTYPE_p_double, 0);
+    //}
     if(PyArray_TYPE(ao) == NPY_INT32) {
         return SWIG_NewPointerObj(data, SWIGTYPE_p_int, 0);
     }
@@ -320,4 +258,3 @@ REV_SWIG_PTR(int, NPY_INT32);
 REV_SWIG_PTR(unsigned char, NPY_UINT8);
 REV_SWIG_PTR(int64_t, NPY_INT64);
 REV_SWIG_PTR(uint64_t, NPY_UINT64);
-
