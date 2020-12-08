@@ -17,35 +17,74 @@ Vearch have four builtins.object
     Query
 use help(vearch.Object) to get more detail infomations.
 """
-
+import time
 import numpy as np
 import copy 
 import pickle
 import uuid
-import parasail
+import json
+import flatbuffers
 from .swigvearch import *
+from . import DataType
+from . import gamma_api
+#from .gamma_api import *
+from .gamma_api import Attribute
+from .gamma_api import Doc
+from .gamma_api import Response
+from .gamma_api import SearchResultCode
+from .gamma_api import Table
+from .gamma_api import VectorInfo
+from .gamma_api import Config
+from .gamma_api import EngineStatus
+from .gamma_api import Field
+from .gamma_api import Request
+from .gamma_api import SearchResult
+from .gamma_api import TermFilter
+from .gamma_api import VectorQuery
+from .gamma_api import FieldInfo
+from .gamma_api import RangeFilter
+
+
 
 ###########################################
 # vearch core
 ###########################################
 
-numpy_dtype_map = {
-    np.dtype('float32'): 'Float',
-    np.dtype('uint8'): 'Byte',
-    np.dtype('int8'): 'Char',
-    np.dtype('uint64'): 'Uint64',
-    np.dtype('int64'): 'Long',
-    np.dtype('int32'): 'Int',
-    np.dtype('float64'): 'Double'   
+dataType = DataType.DataType
+type_map = {dataType.INT:"int32", dataType.LONG:"int64", dataType.FLOAT:"float32",\
+    dataType.DOUBLE:"float64", dataType.STRING:"string", dataType.VECTOR:"vector"}
+
+np_datatype_map = {np.uint8:dataType.INT, np.float32:dataType.FLOAT}
+
+field_type_map = {
+    "string": dataType.STRING,
+    "integer": dataType.LONG,
+    "float": dataType.FLOAT,
+    "vector": dataType.VECTOR,
+    "double": dataType.DOUBLE,
+    "int": dataType.INT,
+    "keyword": dataType.STRING
 }
 
-def byte_array_to_numpy(ba, dtype):
-    ''' convert byte array to numpy array
-        ba: byte array
-    '''
-    vector = eval("ByteArrayTo" + numpy_dtype_map[dtype] + "Vector")(ba)
-    numpy_array = np.asarray(vector, dtype=dtype)
-    return numpy_array
+vector_name_map = {
+    'Float': 'float32',
+    'Byte': 'uint8',
+    'UChar': 'int8',
+    'Uint64': 'uint64',
+    'Long': 'int64',
+    'Int': 'int32',
+    'Double': 'float64'
+    }
+
+def vector_to_array(v):
+    """ convert a C++ vector to a numpy array """
+    classname = v.__class__.__name__
+    assert classname.endswith('Vector')
+    dtype = np.dtype(vector_name_map[classname[:-6]])
+    a = np.empty(v.size(), dtype=dtype)
+    if v.size() > 0:
+        memcpy(swig_ptr(a), swigGetVectorPtr(v), a.nbytes)
+    return a
 
 def normalize_numpy_array(numpy_array):
     array_size = len(numpy_array.shape)
@@ -61,747 +100,907 @@ def normalize_numpy_array(numpy_array):
         raise e
     return (numpy_array, norm)
 
-def numpy_to_byte_array(numpy_array):
-    ''' convert numpy array to byte array
-        numpy_array: numpy array
-    '''
-    dtype = numpy_array.dtype
-    if(dtype != np.dtype("float32")):
-        e = Exception("Wrong data type, now only support float32")
-        raise e
-    dimension = 1
 
-    for d in numpy_array.shape:
-        dimension *= d
-    ba = eval(numpy_dtype_map[dtype] + "sToByteArray")(swig_ptr(numpy_array), dimension)
-    return ba
 
-data_type_map = {
-    DataTypes.INT: 'Int',
-    DataTypes.LONG: 'Long',    
-    DataTypes.FLOAT: 'Float',
-    DataTypes.DOUBLE: 'Double',    
-    DataTypes.STRING: 'String',
-    DataTypes.VECTOR: 'Vector'   
-}
 
-metric_type_map = {
-    "InnerProduct": 0,
-    "L2" : 1
-}
 
-metric_types = [0, 1]
+class GammaConfig:
+    def __init__(self, path, log_dir):
+        self.path = path
+        self.log_dir = log_dir
 
-field_type = [
-    "string",
-    "integer", 
-    "float",
-    "vector"
-]
+    def serialize(self):
+       builder = flatbuffers.Builder(1024)
+       path = builder.CreateString(self.path)
+       log_dir = builder.CreateString(self.log_dir)
+       Config.ConfigStart(builder)
+       Config.ConfigAddPath(builder, path)
+       Config.ConfigAddLogDir(builder, log_dir)
+       engine = Config.ConfigEnd(builder)
+       builder.Finish(engine)
+       buf = builder.Output()
+       return buf
 
-field_type_map = {
-    "string": DataTypes.STRING,
-    "integer": DataTypes.LONG,
-    "float": DataTypes.FLOAT,
-    "vector": DataTypes.VECTOR  
-}
+    def deserialize(self, buf):
+        engine = Config.Config.GetRootAsConfig(buf, 0)
+        self.path = engine.Path()
+        self.log_dir = engine.LogDir()
 
-index_status_map = {
-    IndexStatuses.UNINDEXED : "UNINDEXED",
-    IndexStatuses.INDEXING : "INDEXING",
-    IndexStatuses.INDEXED : "INDEXED"
-}
-
-true_false_map = {
-    "true": TRUE,
-    "false": FALSE
-}
-
-response_code_map = {
-    0: "SUCCESSED",
-    1: "FAILED"
-}
-
-online_log_level = [
-    "DEBUG", 
-    "INFO", 
-    "WARN", 
-    "ERROR"
-]
-
-reserved_field = "_id"
-
-class EngineTable:
-    ''' engine table show how to initialize a table for 
-        engine. It convert table info to the 
-        way engine can accept. 
-    '''
-    def __init__(self, table, load_table=False):
-        ''' initialize table
-            table: engine table detail info, its name, its
-            model info, its properties
-            load_table: whether load table from dumped file
-        '''
-        self.load_table = load_table
-        self.norms = {}
-        self.init_name(table["name"])
-        self.init_model(table["model"])
-        self.init_properties(table["properties"])
-
-    def valid_key(self, dict_object, *keys, **message):
-        '''check dict whether have those key in keys'''
-        for key in keys:
-            if key not in dict_object:
-                ex = Exception("Wrong engine table, " + message["message"] + " should have a key of " + key)
-                raise ex
-        return True            
-
-    def valid_name(self):
-        '''check table name
-        '''
-        if type(self.name) != str and self.name == "":
-            ex = Exception("Wrong engine table, " + "should have a name which is't empty")
-            raise ex
-        return True
-
-    def init_name(self, name):
-        '''init table name
-        '''
+class GammaFieldInfo:
+    def __init__(self, name, data_type, is_index):
         self.name = name
-        self.valid_name()
+        self.type = data_type
+        self.is_index = is_index
 
-    def valid_model(self):
-        '''check table model
-        '''
-        message = {}
-        message["message"] = "table model"
+    def print_self(self):
+        print('name:', self.name)
+        print('type:', self.type)
+        print('index:', self.is_index)
 
-        self.valid_key(self.model, "name", **message)
 
-        self.valid_key(self.model, "ncentroids", \
-                "nprobe", "nsubvector", "metric_type", **message)
-
-        if not (1 <= self.model["nprobe"] and \
-            self.model["nprobe"] <= self.model["ncentroids"]):
-                ex = Exception("Wrong parameters of nprobe or ncentroids, nprobe should less than ncentroids")
-                raise ex 
-
-        if not self.model["metric_type"] in metric_types:
-            ex = Exception("Wrong parameters of metric_type, should be 0 or 1")
-            raise ex
-
-        if not self.model["nsubvector"] % 4 == 0:
-            ex = Exception("Wrong parameters of nsubvector, should be a multiple of 4")
-            raise ex
-
-        return True
+class GammaVectorInfo:
+    def __init__(self, name, type, is_index, dimension, model_id, store_type, store_param, has_source):
+        self.name = name
+        self.type = type
+        self.is_index = is_index
+        self.dimension = dimension
+        self.model_id = model_id
+        self.store_type = store_type
+        self.store_param = store_param
+        self.has_source = has_source
     
-    def init_model(self, model):
-        ''' init table model,
-            model: detail model info
-        '''
-        self.model = copy.deepcopy(model)
-        self.model["nprobe"] = 10
-        if "nprobe" in model and model["nprobe"] != -1:
-            self.model["nprobe"] = model["nprobe"]
-
-        self.model["ncentroids"] = 256
-        if "ncentroids" in model and model["ncentroids"] != -1:
-            self.model["ncentroids"] = model["ncentroids"]
-
-        self.model["nsubvector"] = 32
-        if "nsubvector" in model and model["nsubvector"] != -1:
-            self.model["nsubvector"] = model["nsubvector"]            
-
-        self.model["metric_type"] = 1
-        if "metric_type" in model:
-            self.model["metric_type"] = metric_type_map[model["metric_type"]]
-        
-        self.valid_model()
-
-    def get_metric_type(self):
-        return self.model["metric_type"]
-
-    def valid_properties(self):
-        ''' check table properties
-        '''
-        message = {}
-        message["message"] = "table properties"
-
-        if len(self.properties) == 0:
-            ex = Exception("Empty table properties")
-            raise ex
-        for key in self.properties:
-            if key == reserved_field and self.load_table == False:
-                ex = Exception("Wrong table properties, _id is a reserved field")
-                raise ex 
-            if "type" not in self.properties[key]:
-                ex = Exception("Wrong table properties, should have a key of type")
-                raise ex         
-            if self.properties[key]["type"] not in field_type:
-                ex = Exception("Wrong table properties type")
-                raise ex
-            if self.properties[key]["type"] == "vector":
-                message["message"] += (" " + key)
-                self.valid_key(self.properties[key], "dimension", **message)
-        return True
-
-    def init_properties(self, properties):
-        ''' check table properties
-        '''
-        self.properties = properties
-        self.valid_properties()
-
-        self.properties[reserved_field] = {
-            "type":"string"
-        }
-
-    def get_field_type(self, key):
-        ''' get table properties' field type
-            key: table properties' field
-        '''
-        return field_type_map[self.properties[key]["type"]]
-
-    def get_field_type_size(self):
-        ''' get table properties' field type size
-            return size of Non vector field type and 
-            size of vector field type
-        '''
-        vector_type = 0
-        for key in self.properties:
-            if self.get_field_type(key) == DataTypes.VECTOR:
-                vector_type += 1
-
-        return (len(self.properties) - vector_type, vector_type)
-
-    def get_vector_field_name(self):
-        ''' get all vector fields' name
-        '''
-        vector_field_names = []
-        for key in self.properties:
-            if self.get_field_type(key) == DataTypes.VECTOR:
-                vector_field_names.append(key)
-
-        return vector_field_names 
-
-    def get_return_fields(self, fields_name=None):
-        ''' get return fields for query result
-        '''
-        if fields_name == None:
-            fields_size, _ = self.get_field_type_size()
-            fields_num = 0
-            fields = MakeByteArrays(fields_size)
-
-            for key in self.properties:
-                if self.get_field_type(key) != DataTypes.VECTOR:
-                    field = StringToByteArray(key)
-                    SetByteArray(fields, fields_num, field)
-                    fields_num += 1
-        else:
-            fields_size = len(fields_name)
-            fields_num = 0
-            fields = MakeByteArrays(fields_size)
-
-            for field_name in fields_name:
-                if field_name not in self.properties:
-                    print("Wrong field name, %s not in table" %(field_name))
-                    continue
-                field = StringToByteArray(field_name)
-                SetByteArray(fields, fields_num, field)
-                fields_num += 1
-
-        return (fields, fields_size)
-
-    def get_vector_info(self, key):
-        ''' get table properties' vector field detail info,
-            and set default value for it
-        '''
-        value = self.properties[key]
-        
-        vector_info = {}
-
-        vector_info["type"] = DataTypes.FLOAT #now just support float 
-
-        vector_info["index"] = TRUE
-        if "index" in value:
-            vector_info["index"] = true_false_map[value["index"]]            
-        
-        vector_info["dimension"] = value["dimension"]
-
-        vector_info["model_id"] = ""
-        if "model_id" in value:
-            vector_info["model_id"] = value["model_id"] 
-        
-        vector_info["retrieval_type"] =  "IVFPQ"
-        if "retrieval_type" in value:
-            vector_info["retrieval_type"] = value["retrieval_type"] 
-
-        vector_info["store_type"] = "Mmap"
-        if "store_type" in value:
-            vector_info["store_type"] = value["store_type"]
-        
-        vector_info["store_param"] = ""
-        if "store_param" in value:
-            store_param = '{"cache_size": '
-            store_param += str(value["store_param"]["cache_size"])
-            store_param += "}"
-            vector_info["store_param"] = store_param
-
-        return vector_info
-
-    def get_field_info(self, key):
-        ''' get table properties' non vector field detail info,
-            and set default value for it
-        '''
-        value = self.properties[key]
-        
-        field_info = {}
-
-        field_info["type"] = DataTypes.STRING
-        if "type" in value:
-            field_info["type"] = field_type_map[value["type"]]           
-        
-        field_info["index"] = FALSE
-        if "index" in value:
-            field_info["index"] = true_false_map[value["index"]] 
-
-        return field_info
+    def print_self(self):
+        print('name:', self.name)
+        print('type:', self.type)
+        print('index:', self.is_index)
+        print('dimension:', self.dimension)
+        print('model_id:', self.model_id)
+        print('store_type:', self.store_type)
+        print('store_param:', self.store_param)
+        print('has_source:', self.has_source)
     
-    def parse_field_info(self):
-        ''' parse table properties' field info, because
-            it need to be tanslated to the way that vearch
-            engine can accept.
-        '''
-        fields_info_size, vectors_info_size = self.get_field_type_size()
-        fields_info = MakeFieldInfos(fields_info_size)
-        vectors_info = MakeVectorInfos(vectors_info_size)
-        field_num = 0
-        vector_num = 0
-        dtype = np.dtype('float32')
-        for key in self.properties:
-            if self.get_field_type(key) == DataTypes.VECTOR:
-                info = self.get_vector_info(key)
+    
 
-                vector_info = MakeVectorInfo( \
-                    key, info["type"],\
-                    info["index"], info["dimension"], \
-                    info["model_id"], info["retrieval_type"], \
-                    info["store_type"], info["store_param"])
+class ParseSpace:
+    def __init__(self, table):    
+        self.table = table
 
-                SetVectorInfo(vectors_info, vector_num, vector_info)
-                vector_num += 1
-            else:
-                info = self.get_field_info(key)
-                
-                field_info = MakeFieldInfo( \
-                    StringToByteArray(key), \
-                    info["type"], \
-                    info["index"])
-                SetFieldInfo(fields_info, field_num, field_info)
-                field_num += 1
-        return (fields_info, fields_info_size, vectors_info, vectors_info_size, dtype)
+    def parse_field(self):
+        table = self.table
+        if table.get("properties") == None:
+            ex = Exception("The \"properties\" is undefined!!!")
+            raise ex
+        if len(table["properties"]) < 1:
+            ex = Exception("not have field_infos or vec_infos")
+            raise ex
+        field_infos = {}
+        is_long_type_id = False
+        for name in table["properties"].keys():            
+            dict_tmp = table["properties"][name]
+            #is fields
+            if dict_tmp.get('type') != None and field_type_map.get(dict_tmp['type'].lower()) != None\
+                    and  dict_tmp['type'].lower() != 'vector': 
+                field_type = field_type_map[dict_tmp["type"].lower()]
+                is_index = False
+                if dict_tmp.get("index") and dict_tmp["index"] == True:
+                    is_index = True
+                if name == '_id':
+                    if field_type == dataType.LONG:
+                        is_long_type_id = True
+                    if field_type != dataType.LONG and field_type != dataType.STRING:
+                        ex = Exception('The "type" of "_id" fields must is "string" or "integer"')
+                        raise ex
+                field_infos[name] = GammaFieldInfo(name, field_type, is_index)
+        return field_infos, is_long_type_id
 
-    def parse_model_param(self):
-        ''' parse table model' info, because
-            it need to be tanslated to the way that vearch
-            engine can accept. now just support ivfpq
-        '''
-        model_param = MakeIVFPQParameters( \
-            self.model["metric_type"], \
-            self.model["nprobe"], \
-            self.model["ncentroids"], \
-            self.model["nsubvector"], 8) 
-        return (model_param, "IVFPQ")
+    def parse_other_info(self):
+        table = self.table
+        #name parse
+        if table.get("name") == None or table["name"] == "" or type(table["name"]) != str:
+            ex = Exception("The \'name\' is error,check \'name\'.")
+            raise ex
+        name = table["name"]
+        #engine parse
+        if table.get("engine") == None:
+            ex = Exception('The "engine" is undefined!!!')
+            raise ex
+        engine = {}
+        engine["index_size"] = 100000
+        if table["engine"].get("index_size") != None and table["engine"]["index_size"] > 0:
+            engine["index_size"] = table["engine"]["index_size"]            
+        
+        engine["retrieval_type"] = 'IVFPQ'
+        if table["engine"].get('retrieval_type') != None:
+            engine["retrieval_type"] = table['engine']['retrieval_type']
+        is_binaryivf = False
+        if engine["retrieval_type"] == 'BINARYIVF':
+            is_binaryivf = True
+        #retrieval_param of engine parse
+        engine['retrieval_param'] = ''
+        if "retrieval_param" in table['engine']:
+            engine['retrieval_param'] = table['engine']['retrieval_param']
 
-    def destory_model_param(self, model_param, model_type):
-        ''' when model info send to engine, it will be destoried
-            model_param: model parameters
-            model_type: model type
-        '''
-        eval("Destroy" + model_type + "Parameters")(model_param)
-
-    def create_engine_table(self):
-        ''' parse table info, because
-            it need to be tanslated to the way that vearch
-            engine can accept.
-        '''
-        table_name = StringToByteArray(self.name)
-
-        model_param, model_type = self.parse_model_param()
-
-        fields_info, fields_info_size, vectors_info, vectors_info_size, dtype= self.parse_field_info()
-
-        table_info = MakeTable(table_name, fields_info, \
-            fields_info_size, vectors_info, \
-            vectors_info_size, model_param)
-
-        return (table_info, dtype)
-
-class Item:
-    ''' Document Item will be added to engine, 
-        containing some fields which defined 
-        in engine table, and it tanslate document
-        info to the way engine can accept.
-    '''
-    def __init__(self, info):
-        ''' init document item
-            info: document info
-        '''
-        self.info = copy.deepcopy(info)
-
-    def valid(self, table):
-        ''' check document item
-            table: need auxiliary table info to check 
-            its validation
-        '''
-        properties = table["properties"]
-        for key in self.info:
-            if key not in properties:
-                except_info = "Item have error, " + key + " not in table properties"
-                ex = Exception(except_info)
+        return name, engine, is_binaryivf
+    
+    def parse_vector(self, is_binaryivf):
+        table = self.table
+        if table.get("properties") == None:
+            ex = Exception("The \"properties\" is undefined!!!")
+            raise ex
+        if len(table["properties"]) < 1:
+            ex = Exception("not have field_infos or vec_infos")
+            raise ex
+        vec_infos = {}
+        for name in table["properties"].keys():            
+            dict_tmp = table["properties"][name] 
+            if dict_tmp.get('type') == None or field_type_map.get(dict_tmp['type'].lower()) == None:
+                ex = Exception('The "' + name + '" has no type or the type is not in the right format')
                 raise ex
-            if properties[key]["type"] == "vector" and "feature" not in self.info[key]:
-                except_info = "Item's " + key + " should have key of feature"
-                ex = Exception(except_info)
-                raise ex
-
-        #should also check item's value
-        return True
-
-    def create_doc_item(self, table, doc_id, dtype):
-        ''' tanslate document info to the way 
-            engine can accept.
-            table: table info
-            doc_id: this document item's id
-        '''
-        #_id need extra one field
-        fields_size = len(self.info) + 1
-        fields_num = 0
-        fields = MakeFields(fields_size)
-
-        for key in self.info:
-            name = StringToByteArray(key)
-
-            data_type = table.get_field_type(key)
-
-            if data_type == DataTypes.VECTOR:
-                if isinstance(self.info[key], list):
-                    self.info[key] = np.asarray(self.info[key], dtype=dtype)
-                metric_type = table.get_metric_type()
-                if metric_type == 0:
-                    self.info[key], norm = normalize_numpy_array(self.info[key])
-                    table.norms[doc_id] = norm
-                value = numpy_to_byte_array(self.info[key])
-            elif data_type == DataTypes.STRING:
-                value = StringToByteArray(self.info[key])
-            else:
-                value = eval(data_type_map[data_type] + "ToByteArray")(self.info[key])
-
-            field = MakeField(name, value, data_type)
-            SetField(fields, fields_num, field)
-            fields_num += 1
-
-        #_id should extra add
-        name = StringToByteArray(reserved_field)
-        value = StringToByteArray(doc_id)
-        data_type = DataTypes.STRING
-        field = MakeField(name, value, data_type)
-
-        SetField(fields, fields_num, field)
-
-        item = MakeDoc(fields, fields_size)
-        return item
-
-class Query:
-    ''' Query for search in table, basiclly it have
-        three parts: vector, filter, condition, fields.
-        vector: used to search query results.
-        filter: used to filter query results,
-        get detail info by help(vearch.Query.init_filter()).
-        condition: query condition, for example, 
-        how many result will returned for query, 
-        whethre to rank search result by its' id.
-        fields: what field result will return.
-        And it tanslate query info to the way 
-        engine can accept.
-    '''    
-    def __init__(self, query):
-        ''' init query
-            query: query info
-        '''
-        self.init(query)
-
-    def init(self, query):
-        ''' init query info
-        '''
-        if "vector" in query:
-            self.init_vector(query["vector"])
-        else:
-            self.init_vector()
-        if "filter" in query:
-            self.init_filter(query["filter"])
-        else:
-            self.init_filter()
-        self.init_condition(query)
-
-        if "fields" in query:
-            self.init_return_fields(query["fields"])
-        else:
-            self.init_return_fields()
-
-    def init_vector(self, vector=None):
-        ''' init query vector info and set default
-            value for it.
-            vector: vector info, it can be none,
-            now whole query only filter.
-        '''
-        if vector == None:
-            self.vector = None
-            return
-        self.vector = copy.deepcopy(vector)
-
-        for i in range(0, len(vector)):
-            self.vector[i]["field"] = ""
-            if "field" in vector[i]:
-                self.vector[i]["field"] = vector[i]["field"]
-
-            self.vector[i]["feature"] = None
-            if "feature" in vector[i]:
-                self.vector[i]["feature"] = vector[i]["feature"]
-
-            self.vector[i]["min_score"] = 0.0
-            if "min_score" in vector[i]:
-                self.vector[i]["min_score"] = vector[i]["min_score"]
-
-            self.vector[i]["max_score"] = 10000.0
-            if "max_score" in vector[i]:
-                self.vector[i]["max_score"] = vector[i]["max_score"]
-
-            self.vector[i]["boost"] = 1
-            if "boost" in vector[i]:
-                self.vector[i]["boost"] = vector[i]["boost"]
-
-            self.vector[i]["has_boost"] = 0
-            if "has_boost" in vector[i]:
-                self.vector[i]["has_boost"] = vector[i]["has_boost"]
-
-    def init_filter(self, filters=None):
-        ''' init query filter info. Before using 
-            filter, should set its index value as true 
-            in table. Because filter only works when 
-            it's indexed. And these are two type filter,
-            one is range which field type should be 
-            integer; one is term which field type should 
-            be string.
-            filters: filter info, 
-        '''
-        self.filter = filters
-
-    def init_condition(self, condition):
-        ''' init query condition info and set default
-            value for it.
-            condition: condition info.
-        '''
-        self.condition = {}
-        self.condition["direct_search_type"] = 0
-        if condition != None and "direct_search_type" in condition:
-            self.condition["direct_search_type"] = condition["direct_search_type"]
-
-        self.condition["online_log_level"] = "debug"
-        if condition != None and "online_log_level" in condition:
-            self.condition["online_log_level"] = condition["online_log_level"]
-
-        self.condition["topn"] = 10
-        if condition != None and "topn" in condition:
-            self.condition["topn"] = condition["topn"]
-
-        self.condition["has_rank"] = 1
-        if condition != None and "has_rank" in condition:
-            self.condition["has_rank"] = condition["has_rank"]
-
-        self.condition["multi_vector_rank"] = 1
-        if condition != None and "multi_vector_rank" in condition:
-            self.condition["multi_vector_rank"] = condition["multi_vector_rank"]
-
-        self.condition["parallel_based_on_query"] = 0
-        if condition != None and "parallel_based_on_query" in condition:
-            self.condition["parallel_based_on_query"] = condition["parallel_based_on_query"]
-
-    def init_return_fields(self, fields=None):
-        ''' init query return fields info
-            fields: what field will return in search result.
-        '''
-        self.fields = fields     
-
-    def parse_vector_query(self, table, dtype):
-        ''' parse query vector and tanslate it to
-            the way engine can accept. req_num shows
-            how many query vectors
-            table: engine table need to parse vector
-            query
-        '''
-        req_num = 1
-        if self.vector == None:
-            vector_querys = MakeVectorQuerys(0)
-            return (vector_querys, 0, req_num)
-        vector_querys = MakeVectorQuerys(len(self.vector))
-
-        # In this situation, it's searching with
-        # only one vector field, but maybe one or multi
-        # vector
-
-        if len(self.vector) == 1:
-            if isinstance(self.vector[0]["feature"], list):
-                self.vector[0]["feature"] = np.asarray(self.vector[0]["feature"], dtype=dtype)
-            shape = self.vector[0]["feature"].shape
-            if len(shape) != 1:
-                req_num = shape[0]
-
-        for i in range(0, len(self.vector)):
-            metric_type = table.get_metric_type()
-
-            if isinstance(self.vector[i]["feature"], list):
-                self.vector[i]["feature"] = np.asarray(self.vector[i]["feature"], dtype=dtype)
-            if metric_type == 0:
-                self.vector[i]["feature"], _ = normalize_numpy_array(self.vector[i]["feature"])
-            
-            vector_query = MakeVectorQuery( \
-                StringToByteArray(self.vector[i]["field"]), \
-                numpy_to_byte_array(self.vector[i]["feature"]), \
-                self.vector[i]["min_score"], \
-                self.vector[i]["max_score"], \
-                self.vector[i]["boost"], \
-                self.vector[i]["has_boost"])
-            SetVectorQuery(vector_querys, i, vector_query)
-
-        return (vector_querys, len(self.vector), req_num)
-
-    def get_filter_type_size(self):
-        ''' get the size of range filter and
-            the size of term filter
-        '''
-        range_size = 0
-        term_size = 0
-        if self.filter == None:
-            return (range_size, term_size)
-
-        for filter_type in self.filter:
-            for key in filter_type:
-                if key == "range":
-                    range_size += 1
-                elif key == "term":
-                    term_size += 1
-                else:
-                    except_info = "filter have error, " + key + \
-                    " not in [range, term]"
-                    ex = Exception(except_info)
+            #is vector field
+            if dict_tmp['type'].lower() == 'vector':               
+                field_type = dataType.VECTOR
+                if dict_tmp.get('dimension') == None or not isinstance(dict_tmp['dimension'], int)\
+                        or dict_tmp.get('dimension') < 0:
+                    ex = Exception("dimension is undefined or Invalid format.")
                     raise ex
+                if is_binaryivf and dict_tmp.get('dimension')%8 > 0:
+                    ex = Exception("For banaryivf model, the dimension must be an integer multiple of 8.")
+                dimension = dict_tmp['dimension']
 
-        return (range_size, term_size)
+                is_index = True
+                if dict_tmp.get("index") != None and dict_tmp["index"] == False:
+                    is_index = False
+                    
+                model_id = '1'
+                if dict_tmp.get('model_id') != None and isinstance(dict_tmp['model_id'],str):
+                    model_id = dict_tmp['model_id']
 
-    def parse_filter(self, table):
-        ''' parse query filter and tanslate it to
-            the way engine can accept.
-        '''
-        range_size, term_size = self.get_filter_type_size()
+                store_type = "Mmap"
+                if dict_tmp.get('store_type') != None and isinstance(dict_tmp['store_type'], str) and \
+                        (dict_tmp["store_type"].lower() == 'rocksdb' or dict_tmp["store_type"].lower() == 'memoryonly'): 
+                    store_type = dict_tmp['store_type']
+
+                store_param = ''
+                if dict_tmp.get("store_param") != None and isinstance(dict_tmp["store_param"], str):
+                    store_param["cache_size"] = dict_tmp["store_param"]["cache_size"] 
+                    
+                has_source = False
+                if 'has_source' in dict_tmp and dict_tmp['has_source'] == True:
+                    has_source = True
+                vec_infos[name] = GammaVectorInfo(name, field_type, is_index, dimension\
+                    , model_id, store_type, store_param, has_source)
+        return vec_infos
+
+class GammaTable:
+    def __init__(self):
+        self.norms = {}
+        self.engine = {}
+        self.vec_infos = {}
+        self.field_infos = {}
+        self.name = None
+        self.is_binaryivf = False
+        self.is_long_type_id = False
+
+    def init(self, table):
+        parseSpace = ParseSpace(table)
+        self.name, self.engine, self.is_binaryivf = parseSpace.parse_other_info()
+        self.field_infos, self.is_long_type_id = parseSpace.parse_field()
+        self.vec_infos = parseSpace.parse_vector(self.is_binaryivf)
+        for key in self.vec_infos:
+            self.norms[key] = {}
+        if '_id' not in self.field_infos:
+            self.field_infos['_id'] = GammaFieldInfo('_id', dataType.STRING, True)
+        if len(self.vec_infos) == 0:
+            ex = Exception('There are no vector fields')
+            raise ex
+
+    def check_dimension(self, input_dimension, field_name):
+        if field_name not in self.vec_infos:
+            ex = Exception('The {} field is not a field that was set when the table was built.'.format(field_name))
+            raise ex
+        if self.is_binaryivf_type():
+            if int(self.vec_infos[field_name].dimension/8) != input_dimension:
+                ex = Exception("dimension of add data is not correct. Since the model is BINARYIVF, a vector is {}*uint8."\
+                    .format(int(self.vec_infos[field_name].dimension/8)))
+                raise ex 
+        else:
+            if self.vec_infos[field_name].dimension != input_dimension:
+                ex = Exception("dimension of add data is not correct.")
+                raise ex
+        return True
+
+    def is_binaryivf_type(self):
+        return self.is_binaryivf
+
+    def ser_vector_infos(self, builder, vec_infos):
+        lst_VecInfos = []
+        for key in vec_infos:
+            fb_str_name = builder.CreateString(vec_infos[key].name)
+            fb_str_store_type = builder.CreateString(vec_infos[key].store_type)
+            fb_str_store_param = builder.CreateString(json.dumps(vec_infos[key].store_param))
+            fb_str_model_id = builder.CreateString(vec_infos[key].model_id)
+            VectorInfo.VectorInfoStart(builder)
+            VectorInfo.VectorInfoAddName(builder, fb_str_name)
+            VectorInfo.VectorInfoAddDataType(builder, vec_infos[key].type)
+            VectorInfo.VectorInfoAddIsIndex(builder, vec_infos[key].is_index)
+            VectorInfo.VectorInfoAddDimension(builder, vec_infos[key].dimension)
+            VectorInfo.VectorInfoAddModelId(builder, fb_str_model_id)
+            VectorInfo.VectorInfoAddStoreType(builder, fb_str_store_type)
+            VectorInfo.VectorInfoAddStoreParam(builder, fb_str_store_param)
+            VectorInfo.VectorInfoAddHasSource(builder, vec_infos[key].has_source)
+            lst_VecInfos.append(VectorInfo.VectorInfoEnd(builder))
+        Table.TableStartVectorsInfoVector(builder, len(vec_infos))
+        for i in lst_VecInfos:
+            builder.PrependUOffsetTRelative(i)
+        return builder.EndVector(len(vec_infos))
         
-        range_num = 0
-        term_num = 0
+
+    def ser_field_infos(self, builder, field_infos):
+        lst_fieldInfos = []
+        for key in field_infos:
+            fb_str_name = builder.CreateString(field_infos[key].name)           
+            FieldInfo.FieldInfoStart(builder)
+            FieldInfo.FieldInfoAddName(builder, fb_str_name)
+            FieldInfo.FieldInfoAddDataType(builder, field_infos[key].type)
+            FieldInfo.FieldInfoAddIsIndex(builder, field_infos[key].is_index)
+            lst_fieldInfos.append(FieldInfo.FieldInfoEnd(builder))
+        Table.TableStartFieldsVector(builder, len(field_infos))
+        for i in lst_fieldInfos:
+            builder.PrependUOffsetTRelative(i)
+        return builder.EndVector(len(field_infos))
+
+    def serialize(self):
+        builder = flatbuffers.Builder(1024)
+        name = builder.CreateString(self.name)
+        retrieval_type = builder.CreateString(self.engine['retrieval_type'])
+        retrieval_param = builder.CreateString(json.dumps(self.engine['retrieval_param']))
+        ser_fields = self.ser_field_infos(builder, self.field_infos)
+        ser_vectors = self.ser_vector_infos(builder, self.vec_infos)
+
+        Table.TableStart(builder)
+        Table.TableAddName(builder, name)
+        Table.TableAddFields(builder, ser_fields)
+        Table.TableAddVectorsInfo(builder, ser_vectors)
+        Table.TableAddIndexingSize(builder, self.engine['index_size'])
+        Table.TableAddRetrievalType(builder, retrieval_type)
+        Table.TableAddRetrievalParam(builder, retrieval_param)
+        builder.Finish(Table.TableEnd(builder))
+        self.table_buf = builder.Output()
+        return self.table_buf
+
+    def deserialize(self, buf):
+        table = Table.Table.GetRootAsTable(buf, 0)
+        self.name = table.Name().decode('utf-8')
+        self.field_infos = {}
+        fields_length = table.FieldsLength()
+        for i in range(fields_length):
+            field_info = GammaFieldInfo( \
+                table.Fields(i).Name().decode('utf-8'), \
+                table.Fields(i).DataType(), \
+                table.Fields(i).IsIndex())
+            self.field_infos[field_info.name] = field_info
+        self.vec_infos = {}
+        vec_infos_length = table.VectorsInfoLength()
+        for i in range(vec_infos_length):
+            vec_info = GammaVectorInfo( \
+                table.VectorsInfo(i).Name().decode('utf-8'), \
+                table.VectorsInfo(i).DataType(), \
+                table.VectorsInfo(i).IsIndex(), \
+                table.VectorsInfo(i).Dimension(), \
+                table.VectorsInfo(i).ModelId().decode('utf-8'), \
+                table.VectorsInfo(i).StoreType().decode('utf-8'), \
+                json.loads(table.VectorsInfo(i).StoreParam()), \
+                table.VectorsInfo(i).HasSource())
+            self.vec_infos[vec_info.name] = vec_info
+
+        self.engine['index_size'] = table.IndexingSize()
+        self.engine['retrieval_type'] = table.RetrievalType().decode('utf-8')
+        self.engine['retrieval_param'] = json.loads(table.RetrievalParam())
+        self.is_binaryivf = (True if self.engine['retrieval_type'] == 'BINARYIVF' else False) 
+        self.is_long_type_id = (True if self.field_infos["_id"].type == dataType.LONG else False)
+
+    def print_table_detail_infor(self):
+        print('-------------table name-------------')
+        print(self.name)
+        print('---------engine information----------')
+        print(self.engine)
+        for vec_name in self.vec_infos:
+            print('---------vector field information----------')
+            self.vec_infos[vec_name].print_self()
+        for field_name in self.field_infos:
+            print('---------doc field information----------')
+            self.field_infos[field_name].print_self()
+
+
         
-        range_filters = MakeRangeFilters(range_size)
-        term_filters = MakeTermFilters(term_size)
 
-        if self.filter == None:
-            return (range_filters, range_size, term_filters, term_size)
+class GammaField:
+    def __init__(self, name, value, source, data_type):
+        self.name = name
+        self.origin_value = value
+        if data_type == dataType.VECTOR:
+            if value.dtype == np.float32:
+                self.value = value.view(np.uint8)
+            else:
+                self.value = value
+        elif data_type == dataType.STRING:
+            value = value.encode('utf-8')
+            self.value = np.frombuffer(value, dtype=np.uint8)
+        else:
+            np_value = np.asarray([value], dtype = type_map[data_type])
+            self.value = np_value.view(np.uint8)
+        self.source = source
+        self.type = data_type
+    
+    def print_self(self):
+        print('name:', self.name)
+        print('value:', self.origin_value)
+        print('source:', self.source)
+        print('type:', self.type)
+    
+    def get_field_info(self):
+       return self.name, self.origin_value 
 
-        for filter_type in self.filter:
-            for key in filter_type:
-                if key == "range":
-                    for field in filter_type[key]:
-                        data_type = table.get_field_type(field)
-                        if data_type != DataTypes.LONG:
-                            print("field type error, range filter type should be integer")
-                            return
 
-                        name = StringToByteArray(field)
-                        
-                        if "lte" in filter_type[key][field]:
-                            lower = filter_type[key][field]["lte"]
-                            include_lower = 1
-                        else:
-                            lower = filter_type[key][field]["lt"]
-                            include_lower = 0
+class GammaDoc:
+    def __init__(self):
+        self.fields = []
 
-                        if "gte" in filter_type[key][field]:
-                            upper = filter_type[key][field]["gte"]
-                            include_upper = 1
-                        else:
-                            upper = filter_type[key][field]["gt"]
-                            include_upper = 0                        
+    def get_vecfield_vector(self, table, field_name, vector):
+        if not isinstance(vector, (np.ndarray,list)):
+            ex = Exception("Vector type have error,  Vector type is numpy or list")
+            raise ex
+        if isinstance(vector, list):
+            vector = np.asarray(vector)
+        if table.is_binaryivf_type():
+            vector = vector.astype(np.uint8)
+        else:
+            vector = vector.astype(np.float32)
+            #vector = vector[:table.vec_infos[field_name].dimension]
+        table.check_dimension(vector.shape[0], field_name)
+        return vector
+            
+    def check_scalar_field_type(self, variate, field_name, data_type):
+        if isinstance(variate, int) and\
+                (data_type == dataType.INT or data_type == dataType.LONG):
+            return True
+        elif isinstance(variate, str) and data_type == dataType.STRING:
+            return True
+        elif isinstance(variate, float) and\
+                (data_type == dataType.DOUBLE or data_type == dataType.FLOAT):
+            return True
+        ex = Exception('The "{}" field type have error, field type is string, float, int.'.format(field_name))
+        raise ex
+        return False
 
-                    ba_lower = eval(data_type_map[data_type] + "ToByteArray")(lower)
-                    ba_upper = eval(data_type_map[data_type] + "ToByteArray")(upper)
-                    range_filter = MakeRangeFilter(name, \
-                                    ba_lower, \
-                                    ba_upper, \
-                                    include_lower, \
-                                    include_upper)
+    def parse_doc(self, table, doc_info, doc_id):                       
+        for key in doc_info:
+            if key in table.vec_infos:                                    #is vector fields
+                vector = self.get_vecfield_vector(table, key, doc_info[key])
+                if not table.is_binaryivf_type():
+                    vector, norm = normalize_numpy_array(vector)
+                    table.norms[key][doc_id] = norm
+                fieldNode = GammaField(key, vector, 'source', dataType.VECTOR)
+            elif key in table.field_infos:                                #is fields
+                self.check_scalar_field_type(doc_info[key], key, table.field_infos[key].type)
+                fieldNode = GammaField(key, doc_info[key], "source", table.field_infos[key].type)
+            else:                                                         
+                ex = Exception("Item have error, " + key + " not in table properties")
+                raise ex 
+            self.fields.append(fieldNode)
+        if len(self.fields) != (len(table.field_infos)+len(table.vec_infos)):
+            ex = Exception("There are fields with no values.")
+            raise ex 
+            
 
-                    SetRangeFilter(range_filters, range_num, range_filter)
 
-                    range_num += 1
+    def create_doc_item(self, table, doc_id, doc_info):
+        if '_id' not in doc_info:
+            doc_info['_id'] = doc_id
+        self.parse_doc(table, doc_info, doc_info['_id'])
+        buf = self.serialize()
+        np_buf = np.array(buf)
+        return np_buf, doc_info['_id']
+
+    def get_fields_dict(self):
+        fields_dict = {}
+        for node in self.fields:
+            name ,value = node.get_field_info()
+            fields_dict[name] = value
+        return fields_dict
+
+    def serialize(self):
+        builder = flatbuffers.Builder(1024)
+        lstFieldData = []
+        for i in range(len(self.fields)):
+            nameData = builder.CreateString(self.fields[i].name)
+            sourceData = builder.CreateString(self.fields[i].source)
+            
+            bytesOfValue = self.fields[i].value.tobytes()
+            Field.FieldStartValueVector(builder, len(bytesOfValue))
+            builder.head = builder.head - len(bytesOfValue)
+            builder.Bytes[builder.head : (builder.head + len(bytesOfValue))] = bytesOfValue
+            valueData = builder.EndVector(len(bytesOfValue))
+
+            Field.FieldStart(builder)
+            Field.FieldAddName(builder, nameData)
+            Field.FieldAddSource(builder, sourceData)
+            Field.FieldAddValue(builder, valueData)
+            Field.FieldAddDataType(builder, self.fields[i].type)
+            lstFieldData.append( Field.FieldEnd(builder) )
+
+        Doc.DocStartFieldsVector(builder, len(lstFieldData))
+        #print(dir(builder))
+        for j in reversed(range(len(lstFieldData))):
+            builder.PrependUOffsetTRelative(lstFieldData[j])
+        fields = builder.EndVector(len(lstFieldData))
+
+        Doc.DocStart(builder)
+        Doc.DocAddFields(builder, fields)
+        builder.Finish(Doc.DocEnd(builder))      
+        return builder.Output()
+
+    def deserialize(self, buf, table, _id = None):
+        doc = Doc.Doc.GetRootAsDoc(buf, 0)
+        #return doc
+        self.fields = []
+        for i in range(0, doc.FieldsLength()):
+            name = doc.Fields(i).Name().decode('utf-8')
+            value = doc.Fields(i).ValueAsNumpy()
+            data_type = doc.Fields(i).DataType()
+            if data_type == dataType.STRING:
+                value = value.tobytes().decode('utf-8')
+            elif data_type == dataType.VECTOR or data_type < 0 or data_type > 5:
+                if table.is_binaryivf_type():
+                    value = value.view(dtype = np.uint8)[4:].copy()
                 else:
-                    if len(filter_type[key]) != 2:
-                        print("key error, term filter should have two key.")
-                        return
-                    for field in filter_type[key]:
-                        if field == "operator":
-                            operator = filter_type[key][field]
-                            if operator == "and":
-                                is_union = 0
-                            if operator == "or":
-                                is_union = 1                        
-                        else:
-                            data_type = table.get_field_type(field)
-                            if data_type != DataTypes.STRING:
-                                print("field type error, term filter type should be string")
-                                return
-                            name = StringToByteArray(field)
-                            values = filter_type[key][field]
-                            term_value = ""
-                            for i in range(0, len(values)):
-                                term_value += values[i]
-                                if i != len(values) - 1:
-                                    term_value += "\001"
+                    value = value.view(dtype = np.float32)[1:].copy()
+                    if _id in table.norms[name]:
+                        value *= table.norms[name][_id]
+                data_type = dataType.VECTOR 
+            else:
+                value = value.view(dtype = type_map[data_type])[0]
+            self.fields.append(GammaField(name, value, doc.Fields(i).Source().decode('utf-8'), data_type))
 
-                    term_filter = MakeTermFilter(name, \
-                                    StringToByteArray(term_value), is_union)
-                    SetTermFilter(term_filters, term_num, term_filter)
-                    term_num += 1
 
-        return (range_filters, range_size, term_filters, term_size)
 
-    def create_query_request(self, table, dtype):
-        '''convert query dict to engine query request
-        '''
-        vector_querys, vector_querys_size, req_num = self.parse_vector_query(table, dtype)
+class GammaRangeFilter:
+    def __init__(self, field, lower_value, upper_value, include_lower, include_upper):
+        self.field = field
+        self.lower_value = lower_value.view(np.uint8)
+        self.upper_value = upper_value.view(np.uint8)
+        self.include_lower = include_lower
+        self.include_upper = include_upper
+
+    def print_self(self):
+        print("RangeFilter")
+        print(self.lower_value)
+        print(self.upper_value)
+        print(self.include_upper)
+        print(self.include_lower)
+        print("RangFilter end")
+
+class GammaTermFilter:
+    def __init__(self, field_name, value, is_union):
+        self.field = field_name
+        try:
+            bytes_value = value.encode('utf-8')
+            self.np_value = np.frombuffer(bytes_value, np.uint8)
+        except:
+            ex = Exception('For TermFilter, Please use characters in "ASCII", other characters are not supported for the time being.')
+            raise ex
+        self.value = value
+        self.is_union = is_union
+
+    def print_self(self):
+        print("TermFilter")
+        print(self.value)
+        print(self.field)
+        print(self.is_union)
+        print("TermFilter end")
+
+
+class GammaVectorQuery:
+    def __init__(self, name, value, min_score, max_score, boost, has_boost):
+        self.name = name
+        self.value = value
+        self.min_score = min_score
+        self.max_score = max_score
+        self.boost = boost
+        self.has_boost = has_boost
+
+class GammaRequest:
+    def __init__(self):
+        self.log_level_map = {'DEBUG':0, 'INFO':1, "WARM":2, 'ERROR':3}
+        self.req_num = 0
+        self.topn = 100
+        self.brute_force_search = 0
+        self.retrieval_params = "" 
+        self.has_rank = True
+        self.online_log_level = 'DEBUG'
+        self.multi_vector_rank = 0  
+        self.l2_sqrt = False
+               
+        self.fields = []
+        self.range_filters = []         
+        self.term_filters = []      
+        self.vec_fields = []    
+
+    def create_request(self, querys, table):
+        self.parse_base_info(querys, table)
+        self.req_num, self.vec_fields, self.multi_vector_rank = self.parse_vector_querys(querys, table)
+        if 'filter' in querys:
+            for ft in querys['filter']:
+                if 'range' in ft:
+                    self.range_filters.append(self.parse_range_filter(ft['range'], table))
+                elif 'term' in ft:
+                    self.term_filters.append(self.parse_term_filter(ft['term'], table))
+         
+
+    def parse_base_info(self, querys, table):
+        if 'retrieval_param' in querys and isinstance(querys['retrieval_param'], dict):        
+            self.retrieval_params = json.dumps(querys['retrieval_param'])
         
-        fields, fields_size = table.get_return_fields(self.fields)
+        if 'topn' in querys and isinstance(querys['topn'], int) and querys['topn'] > 0:
+            self.topn = querys['topn']
+        if 'direct_search_type' in querys and isinstance(querys['direct_search_type'], int):
+            self.brute_force_search = 1 if querys['direct_search_type'] == 1 else 0
+        if 'has_rank' in querys and isinstance(querys['has_rank'], bool):
+            self.has_rank = querys['has_rank']
+        if 'online_log_level' in querys and querys['online_log_level'].upper() in self.log_level_map:
+            self.onlin_log_leval = querys['online_log_level']
+        if 'l2_sqrt' in querys and isinstance(querys['l2_sqrt'], bool):
+            self.l2_sqrt = querys['l2_sqrt']
+        #if 'multi_vector_rank' in querys and isinstance(querys['multi_vector_rank'], int):
+        #    self.multi_vector_rank = 0 if querys['multi_vector_rank'] == 0 else 1
+        if 'fields' in querys:
+            self.parse_return_fields(querys['fields'], table)
+        else:
+            self.parse_return_fields([], table)
 
-        range_filters, range_size, term_filters, term_size = self.parse_filter(table)
+
+    def parse_return_fields(self, fie, table):
+        if not isinstance(fie, list):
+            ex = Exception('The "fields" in the query parameter is of type list.')
+            raise ex
+
+        if len(fie) == 0:                         #return all fields
+            for key in table.field_infos.keys():
+                self.fields.append(key)
+            for key in table.vec_infos.keys():
+                self.fields.append(key)
+        else: 
+            for node in fie:
+                if node not in table.field_infos and node not in table.vec_infos:
+                    ex = Exception(node + ' field does not exist.')
+                    raise ex
+                self.fields.append(node)
+        if '_id' not in self.fields:
+            self.fields.append('_id')            
+
+    def parse_term_filter(self, termFilters, table):
+        field_name = ''
+        for key in termFilters.keys():
+            if key in table.field_infos:
+                field_name = key
+
+        if field_name == '':
+            ex = Exception('The field name is not exist.')
+            raise ex
+        is_union = 1
+        if 'operator' in termFilters and isinstance(termFilters['operator'], str):
+            if termFilters['operator'] == 'and':
+                is_union = 0
+            if termFilters['operator'] == 'not in':
+                is_union = 2
+        value = ''
+        for str_value in termFilters[field_name]:
+            if isinstance(str_value, str) == False:
+                ex = Exception('The type of term is not string.')
+                raise ex
+            if value != "":
+                value += "\001"
+            value += str_value
+        return GammaTermFilter(field_name, value, is_union)
+
+    def parse_range_filter(self, rangeFileters, table):
+        if len(rangeFileters) <= 0:
+            return False, ''
+        fieldName = ''
+        for key in rangeFileters.keys():
+            if key in table.field_infos:
+                fieldName = key 
+        if fieldName != '':
+            if 'gte' in rangeFileters[fieldName] and isinstance(rangeFileters[fieldName]['gte'], (int, float)):
+                gte = np.asarray([rangeFileters[fieldName]['gte']], dtype = type_map[table.field_infos[fieldName].type])
+            else:
+                ex = Exception('The gte of rangeFilter has error. Check the data type or whether it is null.')
+                raise ex
+            if 'lte' in rangeFileters[fieldName] and isinstance(rangeFileters[fieldName]['lte'], (int, float)):
+                lte = np.asarray([rangeFileters[fieldName]['lte']], dtype = type_map[table.field_infos[fieldName].type])
+            else:
+                ex = Exception('The lte of rangeFilter has error. Check the data type or whether it is null.')
+                raise ex
+            include_upper = True
+            include_lower = True 
+            if 'include_lower' in rangeFileters[fieldName] and isinstance(rangeFileters[fieldName]['include_lower'], bool):
+                include_lower = rangeFileters[fieldName]['include_lower']
+            if 'include_upper' in rangeFileters[fieldName] and isinstance(rangeFileters[fieldName]['include_upper'], bool):
+                include_upper = rangeFileters[fieldName]['include_upper']
+            return GammaRangeFilter(fieldName, gte, lte, include_lower, include_upper)
+
+    def parse_vector_querys(self, querys, table):
+        if "vector" not in querys:
+            return 1, [], 0
+        lstVectorQuerys = querys['vector'] 
+        vec_fields = []
+        req_num = 0
+        for node in lstVectorQuerys:
+            if 'field' not in node or node['field'] not in table.vec_infos:
+                ex = Exception('The ' + node['field'] + ' field is not table infor.')
+                raise ex
+            if 'feature' not in node:
+                ex = Exception('feature field is not existed.')
+                raise ex
+            if isinstance(node['feature'], np.ndarray) == False:
+                ex = Exception('feature type is error. it is numpy')
+                raise ex
+            
+            boost = 1
+            has_boost = 0               
+            min_score = -10000000
+            max_score = 10000000
+            tmpValue = node['feature']
+            query_num = node['feature'].shape[0]
+            if tmpValue.ndim == 1 :
+                query_num = 1
+            if req_num != 0 and req_num != query_num:
+                ex = Exception("Multiple vector searches, different number of vectors.")
+                raise ex
+            req_num = query_num
+            if table.is_binaryivf_type():
+                tmpValue = tmpValue.astype(np.uint8)
+            else:
+                tmpValue = tmpValue.astype(np.float32)
+                tmpValue, _ = normalize_numpy_array(tmpValue)
+            table.check_dimension(tmpValue.shape[tmpValue.ndim-1], node['field'])
+            tmpValue = tmpValue.flatten()
+            if 'min_score' in node and isinstance(node["min_score"], (int, float)):
+                min_score = node['min_score']
+            if 'max_score' in node and isinstance(node["max_score"], (int, float)):
+                max_score = node['max_score']
+            if 'boost' in node:
+                boost = node['boost']
+                has_boost = 1
+            vec_fields.append(GammaVectorQuery(node['field'], tmpValue, min_score, max_score, boost, has_boost))
+        req_num = 1 if req_num == 0 else req_num
+        multi_vector_rank = 1 if len(vec_fields) > 1 else 0
+        return req_num, vec_fields, multi_vector_rank
+
+    def get_vecQuerys_seria(self, vecQuerys, builder):
+        lst_seria = []
+        for vecQue in vecQuerys:
+            name = builder.CreateString(vecQue.name)
+            
+            bytesOfValue = vecQue.value.tobytes()
+            VectorQuery.VectorQueryStartValueVector(builder, len(bytesOfValue))
+            builder.head = builder.head - len(bytesOfValue)
+            builder.Bytes[builder.head : (builder.head + len(bytesOfValue))] = bytesOfValue
+            valueData = builder.EndVector(len(bytesOfValue))
+
+            VectorQuery.VectorQueryStart(builder)
+            VectorQuery.VectorQueryAddName(builder, name)
+            VectorQuery.VectorQueryAddValue(builder, valueData)
+            VectorQuery.VectorQueryAddMinScore(builder, vecQue.min_score)
+            VectorQuery.VectorQueryAddMaxScore(builder, vecQue.max_score)
+            VectorQuery.VectorQueryAddBoost(builder, vecQue.boost)
+            VectorQuery.VectorQueryAddHasBoost(builder, vecQue.has_boost)
+            lst_seria.append(VectorQuery.VectorQueryEnd(builder))
         
-        request = MakeRequest(self.condition["topn"],
-                    vector_querys, vector_querys_size, \
-                    fields, fields_size, \
-                    range_filters, range_size, \
-                    term_filters, term_size, req_num, \
-                    self.condition["direct_search_type"], \
-                    StringToByteArray(self.condition["online_log_level"]), \
-                    self.condition["has_rank"], \
-                    self.condition["multi_vector_rank"], \
-                    self.condition["parallel_based_on_query"])
+        Request.RequestStartVecFieldsVector(builder, len(lst_seria))
+        for j in reversed(range(len(lst_seria))):
+            builder.PrependUOffsetTRelative(lst_seria[j])
+        return builder.EndVector(len(lst_seria))
 
-        return request
+    def get_range_filters_seria(self, rangeFilter, builder):
+        lst_rangeFilterSera = []
+        for rfNode in rangeFilter:
+            fieldName = builder.CreateString(rfNode.field)
+            bytesOfValue = rfNode.lower_value.tobytes()
+            RangeFilter.RangeFilterStartLowerValueVector(builder, len(bytesOfValue))
+            builder.head = builder.head - len(bytesOfValue)
+            builder.Bytes[builder.head : (builder.head + len(bytesOfValue))] = bytesOfValue
+            lowerValue = builder.EndVector(len(bytesOfValue))
+
+            bytesOfValue = rfNode.upper_value.tobytes()
+            RangeFilter.RangeFilterStartUpperValueVector(builder, len(bytesOfValue))
+            builder.head = builder.head - len(bytesOfValue)
+            builder.Bytes[builder.head : (builder.head + len(bytesOfValue))] = bytesOfValue
+            upperValue = builder.EndVector(len(bytesOfValue))  
+
+            RangeFilter.RangeFilterStart(builder)
+            RangeFilter.RangeFilterAddField(builder, fieldName)
+            RangeFilter.RangeFilterAddLowerValue(builder, lowerValue)
+            RangeFilter.RangeFilterAddUpperValue(builder, upperValue)
+            RangeFilter.RangeFilterAddIncludeLower(builder, rfNode.include_lower)
+            RangeFilter.RangeFilterAddIncludeUpper(builder, rfNode.include_upper)
+            lst_rangeFilterSera.append(RangeFilter.RangeFilterEnd(builder))
+
+        Request.RequestStartRangeFiltersVector(builder, len(lst_rangeFilterSera))
+        for j in reversed(range(len(lst_rangeFilterSera))):
+            builder.PrependUOffsetTRelative(lst_rangeFilterSera[j])
+        return builder.EndVector(len(lst_rangeFilterSera))
+
+    def get_term_filters_seria(self, termFilters, builder):
+        lstTermFilterseria = []
+        for tf in termFilters:
+            fieldName = builder.CreateString(tf.field)
+            
+            bytesOfValue = tf.np_value.tobytes()
+            TermFilter.TermFilterStartValueVector(builder, len(bytesOfValue))
+            builder.head = builder.head - len(bytesOfValue)
+            builder.Bytes[builder.head : (builder.head + len(bytesOfValue))] = bytesOfValue
+            valueData = builder.EndVector(len(bytesOfValue))
+
+            TermFilter.TermFilterStart(builder)
+            TermFilter.TermFilterAddField(builder, fieldName)
+            TermFilter.TermFilterAddValue(builder, valueData)
+            TermFilter.TermFilterAddIsUnion(builder, tf.is_union)
+
+            lstTermFilterseria.append(TermFilter.TermFilterEnd(builder))
+
+        Request.RequestStartTermFiltersVector(builder, len(lstTermFilterseria))
+        for j in reversed(range(len(lstTermFilterseria))):
+            builder.PrependUOffsetTRelative(lstTermFilterseria[j])
+        return builder.EndVector(len(lstTermFilterseria))
+
+    def get_fields_seria(self, fields, builder):
+        lstFields = []
+        for f in fields:
+            lstFields.append(builder.CreateString(f))
+
+        Request.RequestStartFieldsVector(builder, len(lstFields))
+        for j in reversed(range(len(lstFields))):
+            builder.PrependUOffsetTRelative(lstFields[j])
+        return builder.EndVector(len(lstFields))
+
+    def serialize(self):
+        builder = flatbuffers.Builder(1024)
+
+        VqSeria = self.get_vecQuerys_seria(self.vec_fields, builder)
+        RfSeria = self.get_range_filters_seria(self.range_filters, builder)
+        TfSeria = self.get_term_filters_seria(self.term_filters, builder)
+        FdSeria = self.get_fields_seria(self.fields, builder)
+        RpSeria = builder.CreateString(self.retrieval_params)
+        OllSeria = builder.CreateString(self.online_log_level)
+
+        Request.RequestStart(builder)
+        Request.RequestAddReqNum(builder, self.req_num)
+        Request.RequestAddTopn(builder, self.topn)
+        Request.RequestAddBruteForceSearch(builder, self.brute_force_search)
+        Request.RequestAddFields(builder, FdSeria)
+        Request.RequestAddVecFields(builder, VqSeria)
+        Request.RequestAddRangeFilters(builder, RfSeria)
+        Request.RequestAddTermFilters(builder, TfSeria)
+        Request.RequestAddOnlineLogLevel(builder, OllSeria)
+        Request.RequestAddRetrievalParams(builder, RpSeria)
+        Request.RequestAddHasRank(builder, self.has_rank)
+        Request.RequestAddMultiVectorRank(builder, self.multi_vector_rank)
+        Request.RequestAddL2Sqrt(builder, self.l2_sqrt)
+
+        builder.Finish(Request.RequestEnd(builder))
+        return builder.Output()
+
+
+class GammaEngineStatus:
+    def __init__(self):
+        self.index_status = None
+        self.table_mem = None
+        self.index_mem = None
+        self.vector_mem = None
+        self.field_range_mem = None
+        self.bitmap_mem = None
+        self.doc_num = None
+        self.max_docid = None
+
+    def serialize(self):
+        builder = flatbuffers.Builder(1024)
+        EngineStatus.EngineStatusAddIndexStatus(builder, self.index_status)
+        EngineStatus.EngineStatusAddTableMem(builder, self.table_mem)
+        EngineStatus.EngineStatusAddIndexMem(builder, self.index_mem)
+        EngineStatus.EngineStatusAddVectorMem(builder, self.vector_mem)
+        EngineStatus.EngineStatusAddFieldRangeMem(builder, self.field_range_mem)
+        EngineStatus.EngineStatusAddBitmapMem(builder, self.bitmap_mem)
+        EngineStatus.EngineStatusAddDocNum(builder, self.doc_num)
+        EngineStatus.EngineStatusAddMaxDocid(builder, self.max_docid)
+        builder.Finish(EngineStatus.EngineStatusEnd(builder))
+        return builder.Output()
+    
+    def deserialize(self, buf):
+        engine_status = EngineStatus.EngineStatus.GetRootAsEngineStatus(buf, 0)
+        self.index_status = engine_status.IndexStatus()
+        self.table_mem = engine_status.TableMem()
+        self.index_mem = engine_status.IndexMem()
+        self.vector_mem = engine_status.VectorMem()
+        self.field_range_mem = engine_status.FieldRangeMem()
+        self.bitmap_mem = engine_status.BitmapMem()
+        self.doc_num = engine_status.DocNum()
+        self.max_docid = engine_status.MaxDocid()
+
+    def get_status_dict(self):
+        status = {}
+        status['index_status'] = self.index_status
+        status['table_mem'] = self.table_mem
+        status['vector_mem'] = self.vector_mem
+        status['vector_mem'] = self.vector_mem
+        status['field_range_mem'] = self.field_range_mem
+        status['bitmap_mem'] = self.bitmap_mem
+        status['doc_num'] = self.doc_num
+        status['max_docid'] = self.max_docid
+        return status
+
+
+class GammaResponse:
+    def __init__(self, results = None, online_log_message = None):
+        self.search_res = []
+        self.online_log_message = online_log_message
+
+    def npValue_to_value(self, table, name, np_value):
+        if type(np_value) is not np.ndarray:
+            return None
+        if name in table.field_infos:
+            if table.field_infos[name].type == dataType.STRING:
+                value = np_value.tobytes().decode('utf-8')
+            else:
+                value = np_value.view(dtype = type_map[table.field_infos[name].type])[0]
+        if name in table.vec_infos:
+            if not table.is_binaryivf_type():
+                value = np_value.view(np.float32)[1:].copy()
+            else:
+                value = np_value[4:].copy()
+        return value
+        
+    def norm_to_origin(self, table, doc_id, _source, is_binary_ivf):
+        for key in _source:
+            if key in table.vec_infos:
+                if not is_binary_ivf:
+                    _source[key] *= table.norms[key][doc_id]
+                _source[key] = _source[key].tolist()
+        return _source
+
+    def deserialize(self, table, buf):
+        response = Response.Response.GetRootAsResponse(buf, 0)
+        online_log_message = response.OnlineLogMessage().decode('utf-8')
+        query_results = []
+        for i in range(response.ResultsLength()):
+            query_result = {}
+            search_res = response.Results(i)
+            item_res = []
+            for j in range(search_res.ResultItemsLength()):
+                detail = {}
+                res_item = search_res.ResultItems(j)
+                _source = {}
+                _id = ''
+                for k in range(res_item.AttributesLength()):
+                    attri = res_item.Attributes(k)
+                    np_value = attri.ValueAsNumpy()
+                    name = attri.Name().decode('utf-8')
+                    if name == '_id':
+                        _id = self.npValue_to_value(table, name, np_value)
+                    else:
+                        _source[name] = self.npValue_to_value(table, name, np_value)
+                _source = self.norm_to_origin(table, _id, _source, table.is_binaryivf_type())
+                detail['_score'] = res_item.Score()
+                detail['_id'] = _id
+                detail['_source'] = _source
+                item_res.append(detail)
+
+            query_result["total"] = search_res.Total()
+            query_result['results_msg'] = search_res.Msg().decode('utf-8')
+            query_result['results'] = item_res
+            query_results.append(query_result)    
+        self.query_results = query_results
+
 
 class Engine:
     ''' vearch core
@@ -809,54 +1008,45 @@ class Engine:
         build indexes for stored vectors,
         and find the nearest neighbor of vectors. 
     '''
-    def __init__(self, path, max_doc_size):
-        self.path = path
-        self.max_doc_size = max_doc_size
-        self.total_added_num = 0
-        self.init()
-
-    def init(self):
+    def __init__(self, path, log_dir):
         ''' init vearch engine
             path: engine config path to save dump file or 
-                something else engine will create
-            max_doc_size: max doc size engine can afford
+            something else engine will create.
+            log_dir: the log_dir is where the logs are stored.
         '''
-        config = MakeConfig(self.path, self.max_doc_size)
-        self.engine = InitEngine(config)
-        DestroyConfig(config)
-    
-    def init_log_dir(self, path):
-        ''' init engine log dir
-            path: engine to save log
-        '''
-        reponse_code = SetLogDictionary(StringToByteArray(path))
-        return reponse_code
+        self.path = path
+        self.log_dir = log_dir
+        self.init()
+        self.total_added_num = 0
+        self.doc_ids = []
 
-    def create_id(self):
-        ''' create id for add doc
-        '''
-        uid = str(uuid.uuid4())
-        doc_id = ''.join(uid.split('-'))
-        return doc_id
-
-    def close(self):
-        ''' close engine
-        '''
-        response_code = CloseEngine(self.engine)
-        return response_code
+    def init(self):
+        config =  GammaConfig(self.path, self.log_dir)
+        buf = config.serialize()
+        buf = np.array(buf)
+        ptr_buf = swig_ptr(buf)
+        self.c_engine = swigInitEngine(ptr_buf, buf.shape[0])
 
     def create_table(self, table_info):
         ''' create table for engine
             table_info: table detail info
+            return: 0 successed, 1 failed
         '''
-        table = EngineTable(table_info)
-        self.table = table
-        engine_table, self.dtype = table.create_engine_table()
+        self.gamma_table = GammaTable()
+        self.gamma_table.init(table_info)
+        table_buf = self.gamma_table.serialize()
+        self.table_buf = table_buf
+        #self.gamma_table.deserialize(table_buf)
+        np_table_buf = np.array(table_buf)
+        ptableBuf = swig_ptr(np_table_buf)
+        response_code = swigCreateTable(self.c_engine, ptableBuf, np_table_buf.shape[0])
+        return response_code
 
-        response_code = CreateTable(self.engine, engine_table)
-
-        DestroyTable(engine_table)
-
+    def close(self):
+        ''' close engine
+            return: 0 successed, 1 failed
+        '''
+        response_code = swigClose(self.c_engine)
         return response_code
 
     def add(self, docs_info):
@@ -864,299 +1054,169 @@ class Engine:
             docs_info: docs' detail info
             return: unique docs' id for docs
         '''
-        #first add doc to table to save
+        if not isinstance(docs_info, list):
+            ex = Exception('The add function takes an incorrect argument; it must be of a list type.')
+            raise ex
         doc_ids = []
         for doc_info in docs_info:
-            doc_item = Item(doc_info)
-            doc_id = self.create_id()
-            doc = doc_item.create_doc_item(self.table, doc_id, self.dtype)
-            AddOrUpdateDoc(self.engine, doc)
-            doc_ids.append(doc_id)
-            DestroyDoc(doc)
-            self.total_added_num += 1
-        #then build index for them
+            id_str = self.create_id()
+            doc_item = GammaDoc()
+            np_buf, doc_id = doc_item.create_doc_item(self.gamma_table, id_str, doc_info)
+            doc = swig_ptr(np_buf)
+            if 0 == swigAddOrUpdateDoc(self.c_engine, doc, np_buf.shape[0]):
+                doc_ids.append(doc_id)
+                self.total_added_num += 1
         self.build_index()
+        return doc_ids 
+    
+    def update_doc(self, doc_info, doc_id):
+        ''' update doc's info. The docs_info must contain "_id" information.
+            doc_info: doc's new info.
+        '''
+        if not isinstance(doc_info, dict):
+            ex = Exception('The parameter of "update_doc" funtion is list type. \
+                Each node of the list must be of data type dict.')
+            raise ex
+        doc_info['_id'] = doc_id
+        print("update_doc_fun:", doc_info['_id'])
+        doc_item = GammaDoc()
+        np_buf, _id = doc_item.create_doc_item(self.gamma_table, doc_info['_id'], doc_info)
+        doc = swig_ptr(np_buf)
+        response_code = swigAddOrUpdateDoc(self.c_engine, doc, np_buf.shape[0])
+        return response_code
+    
         
-        return doc_ids
+    def del_doc(self, doc_id):
+        ''' delete doc
+            doc_id: delete doc' id
+        '''        
+        id_len = 0
+        if self.gamma_table.is_long_type_id:
+            if not isinstance(doc_id, int):
+                ex = Exception('"_id" type should is int.')
+                raise ex
+            doc_id = np.array([doc_id]).astype('int64')
+            doc_id = doc_id.view(dtype = np.uint8)
+            id_len = 8
+        else:
+            if not isinstance(doc_id, str):
+                ex = Exception('"_id" type should is str.')
+                raise ex
+            id_len = len(doc_id)
+            doc_id = doc_id.encode("utf-8")
+            doc_id = np.frombuffer(doc_id, dtype = "uint8")
+        doc_id = swig_ptr(doc_id)
+        response_code = swigDeleteDoc(self.c_engine, doc_id, id_len)
+        return response_code
+
+
+    def get_status(self):
+        '''get engine status information
+           return: a dict containing status information
+        '''
+        status_buf = swigGetEngineStatus(self.c_engine)
+        np_status_buf = np.asarray(status_buf, dtype=np.uint8)
+        buf = np_status_buf.tobytes()
+        status = GammaEngineStatus()
+        status.deserialize(buf)
+        status_dict = status.get_status_dict()
+        return status_dict
+    
+
+    def get_doc_by_ID(self, doc_id):
+        ''' get doc's detail info by its' id
+            doc_id: doc's id
+        '''
+        if isinstance(doc_id, int):
+            swig_buf = swigGetDocByDocID(self.c_engine, doc_id)
+        elif isinstance(doc_id, str):
+            swig_buf = swigGetDocByID(self.c_engine, doc_id, len(doc_id))
+        else:
+            return {}
+        np_buf = np.asarray(swig_buf ,dtype = np.uint8)
+        buf = np_buf.tobytes()
+        if len(np_buf) == 1:
+            return {}
+        doc = GammaDoc()
+        doc.deserialize(buf, self.gamma_table, doc_id)
+        return doc.get_fields_dict()
+
+
 
     def build_index(self):
         ''' build index for added docs
         '''
-        response_code = BuildIndex(self.engine)
+        response_code = swigBuildIndex(self.c_engine)
         return response_code
-
-    def get_index_status(self):
-        ''' get index status
-            return  "UNINDEXED",
-            or      "INDEXING",
-            or      "INDEXED"
-        '''
-        index_status = GetIndexStatus(self.engine)
-        return index_status_map[index_status]
-
-    def del_doc(self, doc_id):
-        ''' delete doc
-            id: delete doc' id
-        '''
-        response_code = DelDoc(self.engine, StringToByteArray(doc_id))
-        return response_code
-
-    def del_doc_by_query(self, query_info):
-        ''' delete docs by query
-            query_info: what kind docs want to delete
-        '''
-        query = Query(query_info)
-        request = query.create_query_request(self.table, self.dtype)
-        response_code = DelDocByQuery(self.engine, request)
-        DestroyRequest(request)
-        return response_code
-
-    def update_doc(self, doc_info, doc_id):
-        ''' update doc's info, now don't support to update
-            string.
-            doc_info: doc's new info
-            id: which doc want to be updated
-        '''
-        doc_item = Item(doc_info)
-        doc = doc_item.create_doc_item(self.table, doc_id, self.dtype)
-        response_code = UpdateDoc(self.engine, doc)
-        DestroyDoc(doc)
-        return response_code
-
-    def search(self, query_info):
-        ''' search in table
-            query_info: search info
-        '''
-        query = Query(query_info)
-        request = query.create_query_request(self.table, self.dtype)
-        response = Search(self.engine, request)
-        result = self.get_query_result(response, query.fields)
-
-        DestroyRequest(request)
-        DestroyResponse(response)
-
-        return result
-
-    def get_doc_by_id(self, doc_id):
-        ''' get doc's detail info by its' id
-            doc_id: doc's id
-            info
-        '''
-        doc = GetDocByID(self.engine, StringToByteArray(doc_id))
-        doc_info = self.get_doc_field(doc)
-        return doc_info
-
-    def get_doc_num(self):
-        ''' get how many docs in table
-        '''
-        num = GetDocsNum(self.engine)
-        return num
-
-    def get_total_added_num(self):
-        return self.total_added_num
-
-    def get_memory_bytes(self):
-        ''' get how much memory used
-        '''
-        mem_bytes = GetMemoryBytes(self.engine)
-        return mem_bytes
-
+        
     def dump(self):
         ''' dump all info to disk
         '''
-        # store table
         save_table_path = self.path + "/table.pickle"
-        table = {}
-        table["name"] = self.table.name
-        table["model"] = self.table.model
-        if table["model"]["metric_type"] == 0:
-            table["model"]["metric_type"] = "InnerProduct"
-        else:
-            table["model"]["metric_type"] = "L2"
-
-        table["properties"] = self.table.properties
-        table["dtype"] = self.dtype
-
+        table_buf = self.gamma_table.table_buf
         with open(save_table_path, 'wb') as handle:
-            pickle.dump(table, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(table_buf, handle, protocol=pickle.HIGHEST_PROTOCOL)
         
         save_norm_path = self.path + "/norm.pickle"
         with open(save_norm_path, 'wb') as handle:
-            pickle.dump(self.table.norms, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(self.gamma_table.norms, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        response_code = swigDump(self.c_engine)
+        return response_code     
 
-        response_code = Dump(self.engine)
-
-        return response_code
 
     def load(self):
         ''' load info from disk
             when load, need't to create table     
             table info will load from dump file
         '''
-
-        # Load table
         load_table_path = self.path + "/table.pickle"
         with open(load_table_path, 'rb') as handle:
-            table = pickle.load(handle)
-
-        self.dtype = table["dtype"]
-        self.table = EngineTable(table, True)
-
+            table_buf = pickle.load(handle)
+        self.gamma_table = GammaTable()
+        self.gamma_table.deserialize(table_buf)
+        np_table_buf = np.array(table_buf)
+        ptableBuf = swig_ptr(np_table_buf)
+        swigCreateTable(self.c_engine, ptableBuf, np_table_buf.shape[0])
+        
         load_norm_path = self.path + "/norm.pickle"
         with open(load_norm_path, 'rb') as handle:
-            self.table.norms = pickle.load(handle)
+            self.gamma_table.norms = pickle.load(handle)
+        response_code = swigLoad(self.c_engine)
+        return response_code 
 
-        response_code = Load(self.engine)
-
-        return response_code     
-
-    def get_doc_field(self, doc):
-        ''' get doc's field detail info
+    def search(self, query_info):
+        ''' search in table
+            query_info: search info
         '''
-        if doc == None:
-            return None
+        request = GammaRequest()
+        request.create_request(query_info, self.gamma_table)
+        buf = request.serialize()
+        np_buf = np.array(buf)
 
-        fields_info = {}
-        for i in range(0, doc.fields_num):
-            field = GetField(doc, i)
-            name = ByteArrayToString(field.name)
+        p_buf = swig_ptr(np_buf)
+        response = swigSearch(self.c_engine, p_buf, np_buf.shape[0]) 
+        start_time = time.time()
+        np_response = vector_to_array(response)
+        buf = np_response.tobytes()
+        response = GammaResponse()
+        response.deserialize(self.gamma_table, buf)
+        return response.query_results
 
-            if field.data_type == DataTypes.VECTOR:
-                fields_info[name] = byte_array_to_numpy(field.value, self.dtype)
-            else:
-                data_type = data_type_map[field.data_type]
-                value = eval("ByteArrayTo" + data_type)(field.value)
-                fields_info[name] = value
-
-        return fields_info
-
-    def get_query_result(self, response, vector_fields=None):
-        '''convert search result that get from 
-            table to python dict
-            reponse: search result get from table
+    def del_doc_by_query(self, query_info):    
+        ''' delete docs by query
+            query_info: what kind docs want to delete
         '''
-        query_results = []
-        for i in range(0, response.req_num):
-            query_result = {}
-
-            results = GetSearchResult(response, i)
-            query_result["total"] = results.total
-            query_result["result_num"] = results.result_num
-            query_result["results"] = []
-
-            for j in range(0, results.result_num):
-                result_item = GetResultItem(results, j)
-                
-                detail = {}
-                detail["score"] = result_item.score
-                if vector_fields != None:
-                    fields_name = self.table.get_vector_field_name()
-
-                detail["detail_info"] = self.get_doc_field(result_item.doc)
-                #InnerProduct
-                if vector_fields != None:
-                    if self.table.get_metric_type() == 0:
-                        doc_id = detail["detail_info"]["_id"]
-                        for vector in vector_fields:
-                            if vector in fields_name:
-                                detail["detail_info"][vector] *= self.table.norms[doc_id] 
-
-                query_result["results"].append(detail)
-
-            query_results.append(query_result)
-
-        return query_results
-
-class GeneCalculator:
-    ''' calculator gene
-    '''
-    def __init__(self):
-        self.data = []
-        self.total_added_num = 0
+        request = GammaRequest()
+        request.create_request(query_info, self.gamma_table)
+        buf = request.serialize()
+        np_buf = np.array(buf)
+        p_buf = swig_ptr(np_buf)
+        response_code = swigDelDocByQuery(self.c_engine, p_buf, np_buf.shape[0]) 
+        return response_code
 
     def create_id(self):
-        ''' create id for add doc
-        '''
         uid = str(uuid.uuid4())
-        gene_id = ''.join(uid.split('-'))
-        return gene_id
-
-    def check_add_gene(self, gene_info):
-        if "base_sequence" not in gene_info:
-            ex = Exception("Gene info should have key of base_sequence")
-            raise ex
-
-    def add(self, gene_infos):
-        ''' add  gene base sequence info into table
-        '''
-        gene_ids = []
-        for gene_info in gene_infos:
-            gene_id = self.create_id()
-            gene_item = copy.deepcopy(gene_info)
-            self.check_add_gene(gene_item)
-            gene_item[reserved_field] = gene_id
-
-            self.data.append(gene_item)
-            gene_ids.append(gene_id)
-            self.total_added_num += 1
-
-        return gene_ids
-
-    def get_total_added_num(self):
-        return self.total_added_num
-
-    def get_gene_by_id(self, gene_id, show_base_sequence = False):
-        gene_info = {}
-        for gene in self.data:
-            if gene_id == gene[reserved_field]:
-                gene_info = copy.deepcopy(gene)
-                if not show_base_sequence:
-                    gene_info.pop("base_sequence")
-                return gene_info
-        return gene_info
-
-    def update_gene_by_id(self, gene_id, update_info):
-        for i in range(len(self.data)):
-            if gene_id == self.data[i][reserved_field]:
-                if "base_sequence" not in update_info:
-                    update_info["base_sequence"] = self.data[i]["base_sequence"]
-                self.data[i] = copy.deepcopy(update_info)
-                self.data[i][reserved_field] = gene_id
-                break
-
-    def del_gene_by_id(self, gene_id):
-        pop_index = -1
-        for i in range(len(self.data)):
-            if gene_id == self.data[i][reserved_field]:
-                pop_index = i
-                break
-        if(pop_index != -1):
-            self.data.pop(i)
-            self.total_added_num -= 1
-
-    def search(self, query_base_sequence, topK = 10, gap_open = 16, gap_extend = 4, show_base_sequence = False):
-        results = []
-        for gene in self.data:
-            score = self.calculate(query_base_sequence, gene["base_sequence"], gap_open, gap_extend)
-            gene_info = copy.deepcopy(gene)
-            if not show_base_sequence:
-                gene_info.pop("base_sequence")
-            gene_info['score'] = score
-            results.append(gene_info)
-            results = sorted(results, key=lambda keys:keys['score'], reverse=True)
-            if(len(results) > topK):
-                results.pop()
-        return results
-
-    def calculate(self, query_base_sequence, target_base_sequence, gap_open = 16, gap_extend = 4):
-        result = parasail.nw_stats(query_base_sequence, target_base_sequence, gap_open, gap_extend, parasail.dnafull)
-        score = result.similar * 1.0 / result.length
-        return score
-
-    def calculate_batch(self, query_base_sequence, target_base_sequences, gap_open = 16, gap_extend = 4):
-        scores = []
-        for target_base_sequence in target_base_sequences:
-            scores.append(self.calculate(query_base_sequence, target_base_sequence, gap_open, gap_extend))
-        return scores
+        doc_id = ''.join(uid.split('-'))
+        return doc_id
 
 

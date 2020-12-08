@@ -4,6 +4,7 @@ from distutils.command.build import build
 from distutils.command.build_ext import build_ext
 from distutils.util import get_platform
 import os
+import sys
 
 long_description="""
 Vearch is the vector search infrastructure for deeping learning and AI applications. 
@@ -43,6 +44,7 @@ class CustomBuildExt(build_ext):
         # Suppress -Wstrict-prototypes bug in python.
         # https://stackoverflow.com/questions/8106258/
         self._remove_flag('-Wstrict-prototypes')
+        self._remove_flag('g')
         # Remove clang-specific flag.
         compiler_name = self.compiler.compiler[0]
         if 'gcc' in compiler_name or 'g++' in compiler_name:
@@ -58,32 +60,34 @@ class CustomBuildExt(build_ext):
                 args.remove(flag)
 
 
+abspath = os.getcwd()
+
 _swigvearch = Extension(
     'vearch._swigvearch',
     sources=['python/swigvearch.i'],
     define_macros=[('FINTEGER', 'int')],
     language='c++',
     include_dirs=[
-        os.getenv('GAMMA_INCLUDE', '/usr/local/include'),
+        os.getenv('GAMMA_INCLUDE', abspath + '/gamma/c_api'),
     ],
     extra_compile_args=[
         '-std=c++11', '-mavx2', '-mf16c', '-msse4', '-mpopcnt', '-m64',
-        '-Wno-sign-compare', '-fopenmp'
+        '-Wno-sign-compare', '-mlinker-version=450'
     ],
-    extra_link_args=['-fopenmp'],
+    extra_link_args=(['-Xpreprocessor', '-fopenmp', '-lomp','-mlinker-version=450'] if 'darwin' == sys.platform else ['-fopenmp']),
     swig_opts=[
         '-c++', '-Doverride=', 
-        '-I' + os.getenv('GAMMA_INCLUDE', '/usr/local/include'),
+        '-I' + os.getenv('GAMMA_INCLUDE', abspath + '/gamma/c_api'),
     ] + ([] if 'macos' in get_platform() else ['-DSWIGWORDSIZE64'])
 )
 
 setup(
     name='vearch',
-    version='0.3.0.6',
+    version='0.3.1.6',
     description='A library for efficient similarity search and storage of deep learning vectors.',
     long_description=long_description,
     url='https://github.com/vearch/vearch',
-    author='Haifeng Liu, Jie Li, Xingda Wang, Dabin Xie, Chao Zhan',
+    author='Jie Li,Chuanghua Gui,Xingda Wang,Dabin Xie,Chao Zhan,Zhenyun Ni,Qiang Liu,Pengfei Yin,Sen Gao,Yande Guo',
     author_email='vearch-maintainers@groups.io',
     license='Apache License, Version 2.0',
     keywords='real time index, vector nearest neighbors',
@@ -92,8 +96,8 @@ setup(
         'build': CustomBuild,
         'build_ext': CustomBuildExt,
     },
-    install_requires=['numpy>=1.16.0', 'parasail'],
-    package_dir={'vearch': 'python'},
-    packages=['vearch'],
+    install_requires=['numpy>=1.16.0', 'flatbuffers>=1.12.0'],
+    package_dir={'vearch': 'python','vearch/gamma_api': 'python/gamma_api'},
+    packages=['vearch','vearch.gamma_api'],
     ext_modules=[_swigvearch]
 )
