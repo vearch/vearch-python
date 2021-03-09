@@ -148,9 +148,31 @@ engine.create_table(table)
 - retrieval_type : now support IVFPQ , HNSW , BINARYIVF , IVFFLAT and FLAT in python sdk.
 - retrieval_param : 
     - nlinks : It is used in the HNSW model. Number of node neighbors, default 32; 
+    
     - efConstruction: It is used in the HNSW model. The depth to be traversed in order to find the neighbors of nodes during building graph, default 40. 
+    
     - ncentroids : It is used in the IVFPQ , BINARYIVF and IVFFLAT model. coarse cluster center number, default 2048.
+    
     - nsubvector : It is used in the IVFPQ model. the number of sub vector, default 32, only the value which is multiple of 4 is supported now.
+    
+    - If you want to use the IVFHNSWPQ or IVFHNSWOPQ model, retrieval_param is as follows:
+    
+      ```shell
+      "retrieval_type": "IVFPQ",
+      "retrieval_param": {
+          "metric_type": "InnerProduct",
+          "ncentroids": 65536,
+          "nsubvector": 64,
+          "hnsw" : {
+              "nlinks": 32,
+              "efConstruction": 200,
+              "efSearch": 64
+          },
+          "opq": {                #With "opq" it is IVFHNSWOPQ,  
+              "nsubvector": 64    #Without "opq" it is IVFHNSWPQ
+          }
+      }
+      ```
 - properties : define what field are in the table.
 - type : There are five types (that is, the value of type) supported by the
   field defined by the table space structure: string, int, integer, float, double .

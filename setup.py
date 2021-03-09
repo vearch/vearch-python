@@ -72,7 +72,7 @@ _swigvearch = Extension(
     ],
     extra_compile_args=[
         '-std=c++11', '-mavx2', '-mf16c', '-msse4', '-mpopcnt', '-m64',
-        '-Wno-sign-compare', '-mlinker-version=450'
+        '-Wno-sign-compare', '-fopenmp'
     ],
     extra_link_args=(['-Xpreprocessor', '-fopenmp', '-lomp','-mlinker-version=450'] if 'darwin' == sys.platform else ['-fopenmp']),
     swig_opts=[
@@ -83,11 +83,11 @@ _swigvearch = Extension(
 
 setup(
     name='vearch',
-    version='0.3.1.6',
+    version='3.2.5',
     description='A library for efficient similarity search and storage of deep learning vectors.',
     long_description=long_description,
     url='https://github.com/vearch/vearch',
-    author='Jie Li,Chuanghua Gui,Xingda Wang,Dabin Xie,Chao Zhan,Zhenyun Ni,Qiang Liu,Pengfei Yin,Sen Gao,Yande Guo',
+    author='Jie Li,Chuanghua Gui,Xingda Wang,Chao Zhan,Zhenyun Ni,Qiang Liu,Pengfei Yin,Sen Gao,Yande Guo',
     author_email='vearch-maintainers@groups.io',
     license='Apache License, Version 2.0',
     keywords='real time index, vector nearest neighbors',

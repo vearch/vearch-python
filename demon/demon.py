@@ -24,9 +24,22 @@ def test_create_table(engine):
         "engine" : {
             "index_size": 10000,
             "retrieval_type": "IVFPQ",       
-            "retrieval_param": {               
-                "ncentroids": 256,          
-                "nsubvector": 16
+            #"retrieval_param": {               
+            #    "ncentroids": 256,          
+            #    "nsubvector": 16
+            #}
+            "retrieval_param": {
+                "metric_type": "InnerProduct",
+                "ncentroids": 1024,
+                "nsubvector": 64,
+                "hnsw" : {
+                    "nlinks": 32,
+                    "efConstruction": 200,
+                    "efSearch": 64
+                },
+                "opq": {
+                    "nsubvector": 64
+                }
             }
         },
         "properties" : {
@@ -79,7 +92,7 @@ def test_create_table(engine):
         print("create table failed")
 
 
-def test_add(engine, add_num=10000):
+def test_add(engine, add_num=100000):
     print("######        test add          ######")    
     doc_items = []
     features = np.random.rand(add_num, 64).astype('float32')
@@ -443,8 +456,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-
-
