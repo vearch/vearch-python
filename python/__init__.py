@@ -18,6 +18,7 @@ Vearch have four builtins.object
 use help(vearch.Object) to get more detail infomations.
 """
 import time
+import sys
 import numpy as np
 import copy 
 import pickle
@@ -27,7 +28,7 @@ import flatbuffers
 from .swigvearch import *
 from . import DataType
 from . import gamma_api
-#from .gamma_api import *
+#from . gamma_api import *
 from .gamma_api import Attribute
 from .gamma_api import Doc
 from .gamma_api import Response
@@ -43,8 +44,6 @@ from .gamma_api import TermFilter
 from .gamma_api import VectorQuery
 from .gamma_api import FieldInfo
 from .gamma_api import RangeFilter
-
-
 
 ###########################################
 # vearch core
@@ -161,7 +160,7 @@ class GammaVectorInfo:
     
     
 
-class ParseSpace:
+class ParseTable:
     def __init__(self, table):    
         self.table = table
 
@@ -219,6 +218,10 @@ class ParseSpace:
         engine['retrieval_param'] = ''
         if "retrieval_param" in table['engine']:
             engine['retrieval_param'] = table['engine']['retrieval_param']
+        
+        engine["compress_mode"] = 0
+        engine["retrieval_types"] = []
+        engine["retrieval_params"] = []
 
         return name, engine, is_binaryivf
     
@@ -282,10 +285,10 @@ class GammaTable:
         self.is_long_type_id = False
 
     def init(self, table):
-        parseSpace = ParseSpace(table)
-        self.name, self.engine, self.is_binaryivf = parseSpace.parse_other_info()
-        self.field_infos, self.is_long_type_id = parseSpace.parse_field()
-        self.vec_infos = parseSpace.parse_vector(self.is_binaryivf)
+        parseTable = ParseTable(table)
+        self.name, self.engine, self.is_binaryivf = parseTable.parse_other_info()
+        self.field_infos, self.is_long_type_id = parseTable.parse_field()
+        self.vec_infos = parseTable.parse_vector(self.is_binaryivf)
         for key in self.vec_infos:
             self.norms[key] = {}
         if '_id' not in self.field_infos:
@@ -334,7 +337,6 @@ class GammaTable:
             builder.PrependUOffsetTRelative(i)
         return builder.EndVector(len(vec_infos))
         
-
     def ser_field_infos(self, builder, field_infos):
         lst_fieldInfos = []
         for key in field_infos:
@@ -356,14 +358,34 @@ class GammaTable:
         retrieval_param = builder.CreateString(json.dumps(self.engine['retrieval_param']))
         ser_fields = self.ser_field_infos(builder, self.field_infos)
         ser_vectors = self.ser_vector_infos(builder, self.vec_infos)
-
+        lst_types = []
+        for val in self.engine["retrieval_types"]:
+            fb_str = builder.CreateString(val)
+            lst_types.append(fb_str)
+        VectorInfo.VectorInfoStart(builder)
+        for val in lst_types:
+            builder.PrependUOffsetTRelative(val)
+        retrieval_types = builder.EndVector(len(lst_types))
+        
+        lst_params = []
+        for val in self.engine["retrieval_params"]:
+            fb_str =builder.CreateString(val)
+            lst_params.append(fb_str)
+        VectorInfo.VectorInfoStart(builder)
+        for val in lst_params:
+            builder.PrependUOffsetTRelative(val)
+        retrieval_params = builder.EndVector(len(lst_params))
+        
         Table.TableStart(builder)
         Table.TableAddName(builder, name)
         Table.TableAddFields(builder, ser_fields)
         Table.TableAddVectorsInfo(builder, ser_vectors)
         Table.TableAddIndexingSize(builder, self.engine['index_size'])
+        Table.TableAddCompressMode(builder, self.engine['compress_mode'])
         Table.TableAddRetrievalType(builder, retrieval_type)
         Table.TableAddRetrievalParam(builder, retrieval_param)
+        Table.TableAddRetrievalTypes(builder, retrieval_types)
+        Table.TableAddRetrievalParams(builder, retrieval_params)
         builder.Finish(Table.TableEnd(builder))
         self.table_buf = builder.Output()
         return self.table_buf
@@ -601,13 +623,14 @@ class GammaTermFilter:
 
 
 class GammaVectorQuery:
-    def __init__(self, name, value, min_score, max_score, boost, has_boost):
+    def __init__(self, name, value, min_score, max_score, boost, has_boost, retrieval_type):
         self.name = name
         self.value = value
         self.min_score = min_score
         self.max_score = max_score
         self.boost = boost
         self.has_boost = has_boost
+        self.retrieval_type = retrieval_type
 
 class GammaRequest:
     def __init__(self):
@@ -748,6 +771,7 @@ class GammaRequest:
             
             boost = 1
             has_boost = 0               
+            retrieval_type = ''
             min_score = -10000000
             max_score = 10000000
             tmpValue = node['feature']
@@ -772,7 +796,10 @@ class GammaRequest:
             if 'boost' in node:
                 boost = node['boost']
                 has_boost = 1
-            vec_fields.append(GammaVectorQuery(node['field'], tmpValue, min_score, max_score, boost, has_boost))
+            if 'retrieval_type' in node:
+                retrieval_type = noed["retrieval_type"]
+
+            vec_fields.append(GammaVectorQuery(node['field'], tmpValue, min_score, max_score, boost, has_boost, retrieval_type))
         req_num = 1 if req_num == 0 else req_num
         multi_vector_rank = 1 if len(vec_fields) > 1 else 0
         return req_num, vec_fields, multi_vector_rank
@@ -781,6 +808,7 @@ class GammaRequest:
         lst_seria = []
         for vecQue in vecQuerys:
             name = builder.CreateString(vecQue.name)
+            fb_retrieval_type = builder.CreateString(vecQue.retrieval_type)
             
             bytesOfValue = vecQue.value.tobytes()
             VectorQuery.VectorQueryStartValueVector(builder, len(bytesOfValue))
@@ -795,6 +823,7 @@ class GammaRequest:
             VectorQuery.VectorQueryAddMaxScore(builder, vecQue.max_score)
             VectorQuery.VectorQueryAddBoost(builder, vecQue.boost)
             VectorQuery.VectorQueryAddHasBoost(builder, vecQue.has_boost)
+            VectorQuery.VectorQueryAddRetrievalType(builder, fb_retrieval_type)
             lst_seria.append(VectorQuery.VectorQueryEnd(builder))
         
         Request.RequestStartVecFieldsVector(builder, len(lst_seria))
