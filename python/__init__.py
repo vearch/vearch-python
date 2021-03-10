@@ -797,7 +797,7 @@ class GammaRequest:
                 boost = node['boost']
                 has_boost = 1
             if 'retrieval_type' in node:
-                retrieval_type = noed["retrieval_type"]
+                retrieval_type = node["retrieval_type"]
 
             vec_fields.append(GammaVectorQuery(node['field'], tmpValue, min_score, max_score, boost, has_boost, retrieval_type))
         req_num = 1 if req_num == 0 else req_num
