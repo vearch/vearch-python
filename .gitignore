@@ -6,3 +6,4 @@ python/DataType.py
 python/gamma_api
 python/swigvearch.py
 python/swigvearch_wrap.cpp
+wheelhouse

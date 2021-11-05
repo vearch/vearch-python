@@ -1,5 +1,5 @@
-import vearch
 import numpy as np
+import vearch
 import sys
 import time
 import json
@@ -24,23 +24,24 @@ def test_create_table(engine):
         "engine" : {
             "index_size": 10000,
             "retrieval_type": "IVFPQ",       
-            #"retrieval_param": {               
-            #    "ncentroids": 256,          
-            #    "nsubvector": 16
-            #}
-            "retrieval_param": {
-                "metric_type": "InnerProduct",
-                "ncentroids": 1024,
-                "nsubvector": 64,
-                "hnsw" : {
-                    "nlinks": 32,
-                    "efConstruction": 200,
-                    "efSearch": 64
-                },
-                "opq": {
-                    "nsubvector": 64
-                }
+            "retrieval_param": {               
+                "ncentroids": 256,          
+                "nsubvector": 16
             }
+            # this is for very large dataset and not suitable for random data
+            #"retrieval_param": {
+            #    "metric_type": "InnerProduct",
+            #    "ncentroids": 1024,
+            #    "nsubvector": 64,
+            #    "hnsw" : {
+            #        "nlinks": 32,
+            #        "efConstruction": 200,
+            #        "efSearch": 64
+            #    },
+            #    "opq": {
+            #        "nsubvector": 64
+            #    }
+            #}
         },
         "properties" : {
             #"_id":{                        #You usually don't need to specify. Vearch is automatically specified.
@@ -96,7 +97,6 @@ def test_add(engine, add_num=100000):
     print("######        test add          ######")    
     doc_items = []
     features = np.random.rand(add_num, 64).astype('float32')
-    print(features[123])
 
     for i in range(add_num):
         profiles = {}
@@ -114,7 +114,7 @@ def test_add(engine, add_num=100000):
     
     docs_id = engine.add(doc_items)
     print("add complete, success num:", len(docs_id))
-    time.sleep(5)
+    time.sleep(10)
     #'index_status': 2. Indexing complete.
     #'index_status': 1. Building index.
     #'index_status': 0. No index built.
@@ -123,7 +123,10 @@ def test_add(engine, add_num=100000):
         index_status = engine.get_status()['index_status']
         time.sleep(0.005)
     print("engine status:",engine.get_status())
-    print(engine.get_doc_by_ID(docs_id[123]))
+    for i in range(2):
+        print(doc_items[i])
+        print("   ")
+        print(engine.get_doc_by_id(docs_id[i]))
     return (doc_items, docs_id)
 
 
@@ -328,12 +331,12 @@ def test_multi_vector_search(engine):
 
 def test_update(engine, doc_items, id):
     print("######        test update       ######")
-    print(engine.get_doc_by_ID(id))
+    print(engine.get_doc_by_id(id))
     update_item = doc_items[0]
     update_item["key"] = 2021
     #print(update_item)
     response_code = engine.update_doc(update_item, id)
-    print(engine.get_doc_by_ID(id))
+    print(engine.get_doc_by_id(id))
     if response_code == 0:              #response_code: 0, success; 1 failed.
         print("update_doc success")
     else:
@@ -342,9 +345,9 @@ def test_update(engine, doc_items, id):
 def test_del_doc_by_id(engine, id):
     print("######  test delete doc by id   ######")
     print("engine status",engine.get_status())
-    print(engine.get_doc_by_ID(id))
+    print(engine.get_doc_by_id(id))
     engine.del_doc(id)
-    print(engine.get_doc_by_ID(id))
+    print(engine.get_doc_by_id(id))
     print("engine status", engine.get_status())
 
 def test_del_doc_by_range(engine):
@@ -405,7 +408,7 @@ def test_load(doc_id):
 
     test_multi_vector_search(engine)
     
-    print("get_doc_by_ID", engine.get_doc_by_ID(doc_id))
+    print("get_doc_by_id", engine.get_doc_by_id(doc_id))
 
     time.sleep(5)
 
@@ -424,7 +427,6 @@ def main():
         doc_items, docs_id = test_add(engine)
 
     result = test_search(engine)
-    print(doc_items[result[0]['results'][0]["_source"]["key"]]['feature'])
     
     test_violent_search(engine)
 

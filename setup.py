@@ -68,7 +68,8 @@ _swigvearch = Extension(
     define_macros=[('FINTEGER', 'int')],
     language='c++',
     include_dirs=[
-        os.getenv('GAMMA_INCLUDE', abspath + '/gamma/c_api'),
+        os.getenv('GAMMA_INCLUDE', abspath + '/gamma/'),
+        os.getenv('GAMMA_INCLUDE', abspath + '/gamma/') + '/third_party',
     ],
     extra_compile_args=[
         '-std=c++11', '-mavx2', '-mf16c', '-msse4', '-mpopcnt', '-m64',
@@ -77,13 +78,14 @@ _swigvearch = Extension(
     extra_link_args=(['-Xpreprocessor', '-fopenmp', '-lomp','-mlinker-version=450'] if 'darwin' == sys.platform else ['-fopenmp']),
     swig_opts=[
         '-c++', '-Doverride=', 
-        '-I' + os.getenv('GAMMA_INCLUDE', abspath + '/gamma/c_api'),
+        '-I' + os.getenv('GAMMA_INCLUDE', abspath + '/gamma/'),
+        '-I' + os.getenv('GAMMA_INCLUDE', abspath + '/gamma/') + '/third_party',
     ] + ([] if 'macos' in get_platform() else ['-DSWIGWORDSIZE64'])
 )
 
 setup(
     name='vearch',
-    version='3.2.5',
+    version='3.2.8',
     description='A library for efficient similarity search and storage of deep learning vectors.',
     long_description=long_description,
     url='https://github.com/vearch/vearch',
@@ -96,7 +98,7 @@ setup(
         'build': CustomBuild,
         'build_ext': CustomBuildExt,
     },
-    install_requires=['numpy>=1.16.0', 'flatbuffers>=1.12.0'],
+    install_requires=['numpy>=1.16.0', 'flatbuffers==1.12.0'],
     package_dir={'vearch': 'python','vearch/gamma_api': 'python/gamma_api'},
     packages=['vearch','vearch.gamma_api'],
     ext_modules=[_swigvearch]

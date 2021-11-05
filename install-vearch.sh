@@ -1,11 +1,7 @@
 #!/bin/bash
 set -e -x
 
-# Install a system package required by our library
-# yum install -y atlas-devel
-
-# Compile wheels
-
+version=3.2.8
 
 OS=`uname -s`
 if [ ${OS} == "Darwin" ];then
@@ -21,10 +17,10 @@ if [ ${OS} == "Darwin" ];then
         pip install ${WHEEL}
     done            
 elif [ `expr substr ${OS} 1 5` == "Linux" ];then
-    for PYBIN in /opt/python/*/bin; do
+    for PYBIN in /opt/python/cp38-cp38/bin; do
         python_tag=$(echo ${PYBIN} | cut -d '/' -f4)
         "${PYBIN}/pip" uninstall vearch --yes
-        "${PYBIN}/pip" install "wheelhouse/vearch-0.3.0.6-${python_tag}-manylinux2010_x86_64.whl"  
+        "${PYBIN}/pip" install "wheelhouse/vearch-$version-${python_tag}-manylinux_2_12_x86_64.manylinux2010_x86_64.whl"  
          "${PYBIN}/python" -c "import vearch"
     done
 elif [];then

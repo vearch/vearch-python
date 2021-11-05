@@ -21,14 +21,29 @@ for the best performance.
 
 ### Prerequisite
 
+You can build it with docker image: pypywheels/manylinux2010-pypy_x86_64:latest
+
+auditwheel tool should be installed firstly. You can install it by pip.
+
 The package can be built when gamma is already built and installed.
 See the official [gamma installation
 instruction](https://github.com/vearch/gamma/blob/master/README.md) for more
 on how to build and install gamma. In particular, compiling wheel packages
-requires additional compilation options in compiling gamma:
+requires additional compilation options in compiling gamma.
+
 ```bash
--DBUILD_PYTHON=ON
+git clone https://github.com/vearch/vearch-python.git
+git submodule init
+git submodule update
+cd gamma
+mkdir build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release -DPERFORMANCE_TESTING=ON ..
+make
+sh build-wheels.sh
+sh install-vearch.sh
 ```
+
+Then the whl file will be generated into the wheelhouse directory.
 
 For building wheel packages, swig 3.0.12 or later needs to be avaiable.
 
