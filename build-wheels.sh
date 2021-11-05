@@ -1,6 +1,7 @@
 #!/bin/bash
 
-BASE_PATH=./gamma
+ROOT_PATH=`pwd`
+BASE_PATH=$ROOT_PATH"/gamma"
 OS=`uname -s`
 cp -r $BASE_PATH/idl/fbs-gen/python/* ./python
 
