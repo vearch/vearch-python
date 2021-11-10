@@ -114,14 +114,13 @@ def test_add(engine, add_num=100000):
     
     docs_id = engine.add(doc_items)
     print("add complete, success num:", len(docs_id))
-    time.sleep(10)
-    #'index_status': 2. Indexing complete.
-    #'index_status': 1. Building index.
-    #'index_status': 0. No index built.
-    index_status = 0
-    while index_status != 2:
-        index_status = engine.get_status()['index_status']
-        time.sleep(0.005)
+    time.sleep(5)
+
+    #'min_indexed_num' = xb.shape[0]. Indexing complete.
+    indexed_num = 0
+    while indexed_num != xb.shape[0]:
+        indexed_num = engine.get_status()['min_indexed_num']
+        time.sleep(0.5)
     print("engine status:",engine.get_status())
     for i in range(2):
         print(doc_items[i])

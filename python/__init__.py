@@ -538,7 +538,7 @@ class GammaDoc:
         return False
 
     def parse_doc(self, table, doc_info, doc_id):                       
-        for key in sorted(doc_info.keys()):
+        for key in doc_info.keys():
             if key in table.vec_infos:                                    #is vector fields
                 vector = self.get_vecfield_vector(table, key, doc_info[key])
                 #if not table.is_binaryivf_type():
@@ -1017,6 +1017,7 @@ class GammaEngineStatus:
         self.bitmap_mem = None
         self.doc_num = None
         self.max_docid = None
+        self.min_indexed_num = None
 
     def serialize(self):
         builder = flatbuffers.Builder(1024)
@@ -1028,6 +1029,7 @@ class GammaEngineStatus:
         EngineStatus.EngineStatusAddBitmapMem(builder, self.bitmap_mem)
         EngineStatus.EngineStatusAddDocNum(builder, self.doc_num)
         EngineStatus.EngineStatusAddMaxDocid(builder, self.max_docid)
+        EngineStatus.EngineStatusAddMinIndexedNum(builder, self.min_indexed_num)
         builder.Finish(EngineStatus.EngineStatusEnd(builder))
         return builder.Output()
     
@@ -1041,6 +1043,7 @@ class GammaEngineStatus:
         self.bitmap_mem = engine_status.BitmapMem()
         self.doc_num = engine_status.DocNum()
         self.max_docid = engine_status.MaxDocid()
+        self.min_indexed_num = engine_status.MinIndexedNum()
 
     def get_status_dict(self):
         status = {}
@@ -1052,6 +1055,7 @@ class GammaEngineStatus:
         status['bitmap_mem'] = self.bitmap_mem
         status['doc_num'] = self.doc_num
         status['max_docid'] = self.max_docid
+        status['min_indexed_num'] = self.min_indexed_num
         return status
 
 

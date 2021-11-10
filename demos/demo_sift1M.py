@@ -30,22 +30,6 @@ def mmap_bvecs(fname):
     d = x[:4].view('int32')[0]
     array = x.reshape(-1, d + 4)[:, 4:]
     return np.ascontiguousarray(array.astype('float32'))
-'''
-def get_nearestneighbors_faiss(xb, xq, k):
-    index = faiss.IndexFlatIP(xq.shape[1])
-    index.add(xb)
-    _, I = index.search(xq, k)
-    return I
-'''
-
-def get_nearestneighbors(index, xq, k, nprobe):
-    nq = xq.shape[0]
-    start = time.time()
-    index.nprobe = nprobe
-    _, I = index.search(xq, k)
-    elap = time.time() - start
-    print('average: %.4f ms, QPS: %.4f' % (elap * 1000 / nq, 1 / (elap / nq)))
-    return I
 
 def get_nearestneighbors_vearch(engine, xq, k, nprobe, is_batch):
     nq = xq.shape[0]
@@ -169,16 +153,13 @@ def evaluate_vearch(xb, xq, xt, gt):
     docs_id = engine.add(doc_items)
     engine.verbose = False
     print("add complete, success num: %d, cost %.4f s" % (len(docs_id), time.time() - start))
-    time.sleep(50)
-    #print(docs_id[0], engine.get_doc_by_ID(docs_id[0])) 
-    #'index_status': 2. Indexing complete.
-    #'index_status': 1. Building index.
-    #'index_status': 0. No index built.
-    
-    index_status = 0
-    while index_status != 2:
-        index_status = engine.get_status()['index_status']
-        time.sleep(0.005)
+    time.sleep(5)
+
+    #'min_indexed_num' = xb.shape[0]. Indexing complete.
+    indexed_num = 0
+    while indexed_num != xb.shape[0]:
+        indexed_num = engine.get_status()['min_indexed_num']
+        time.sleep(0.5)
     print("engine status:",engine.get_status())
 
     k = gt.shape[1]
