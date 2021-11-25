@@ -116,9 +116,9 @@ def test_add(engine, add_num=100000):
     print("add complete, success num:", len(docs_id))
     time.sleep(5)
 
-    #'min_indexed_num' = xb.shape[0]. Indexing complete.
+    #'min_indexed_num' = features.shape[0]. Indexing complete.
     indexed_num = 0
-    while indexed_num != xb.shape[0]:
+    while indexed_num != features.shape[0]:
         indexed_num = engine.get_status()['min_indexed_num']
         time.sleep(0.5)
     print("engine status:",engine.get_status())
