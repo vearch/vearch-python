@@ -152,7 +152,7 @@ typedef int64_t size_t;
             return vec_res;
         }
     }
-    
+   
     tig_gamma::Request *swigCreateRequest() {
         return new tig_gamma::Request();    
     }
@@ -163,7 +163,30 @@ typedef int64_t size_t;
             request = nullptr;
         }    
     }
-    
+
+    void swigSetNprobe(void *engine, int nprobe, std::string index_type) {
+        CPPSetNprobe(engine, nprobe, index_type);
+    }
+
+    void swigSetRerank(void *engine, int rerank, std::string index_type) {
+        CPPSetRerank(engine, rerank, index_type);
+    }
+
+    tig_gamma::VectorResult *swigCreateVectorResult(int n, int k, float *dists, int64_t *labels) {
+        tig_gamma::VectorResult *result = new tig_gamma::VectorResult();
+        result->init(n, k, dists, labels);
+        return result;
+    }
+
+    void swigDeleteVectorResult(tig_gamma::VectorResult *result) {
+        if (result) {
+            result->dists = nullptr;
+            result->docids = nullptr;
+            delete result;
+            result = nullptr;
+        }    
+    }
+
     tig_gamma::Response *swigCreateResponse() {
         return new tig_gamma::Response();    
     }
@@ -264,6 +287,10 @@ typedef int64_t size_t;
         return CPPSearch(engine, request, response);
     }
 
+    int swigSearchCPP2(void* engine, tig_gamma::VectorResult *result) {
+        return CPPSearch2(engine, result);
+    }
+
     int swigAddOrUpdateDocCPP(void* engine, tig_gamma::Doc *doc) {
         return CPPAddOrUpdateDoc(engine, doc);
     }
@@ -281,6 +308,10 @@ typedef int64_t size_t;
 
     int swigAddOrUpdateDocsCPP(void* engine, tig_gamma::Docs *docs, tig_gamma::BatchResult *results) {
         return CPPAddOrUpdateDocs(engine, docs, results);
+    }
+
+    int swigAddOrUpdateDocsCPP2(void* engine, tig_gamma::Docs *docs, float *data, tig_gamma::BatchResult *results) {
+        return CPPAddOrUpdateDocs2(engine, docs, data, results);
     }
 
     int swigDelDocByQuery(void* engine, unsigned char *pRequest, int len){

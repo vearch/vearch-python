@@ -25,11 +25,13 @@ elif [ `expr substr ${OS} 1 5` == "Linux" ];then
     export GAMMA_LDFLAGS=$BASE_PATH/build/libgamma.so
     export GAMMA_INCLUDE=$BASE_PATH
     export LD_LIBRARY_PATH=$BASE_PATH/build/:$LD_LIBRARY_PATH
-    for PYBIN in /opt/python/cp38-cp38/bin; do
-        "${PYBIN}/pip" install -r dev-requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
-        "${PYBIN}/python" setup.py bdist_wheel
-        auditwheel repair dist/vearch* 
-        rm -rf dist build vearch.egg-info 
+    for PYBIN in /opt/python/*/bin; do
+        if [[ ${PYBIN} =~ "cp" ]]; then
+            "${PYBIN}/pip" install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+            "${PYBIN}/python" setup.py bdist_wheel
+            auditwheel repair dist/vearch* 
+            rm -rf dist build vearch.egg-info 
+        fi
     done 
 elif [ `expr substr ${OS} 1 10` == "MINGW" ];then  
     echo "windows not support"
