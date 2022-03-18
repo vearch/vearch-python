@@ -10,11 +10,6 @@ Provides
   2. vector similarity search
   3. use like a database
 
-Vearch have four builtins.object
-    Engine
-    EngineTable
-    Item
-    Query
 use help(vearch.Object) to get more detail infomations.
 """
 import time
@@ -566,6 +561,15 @@ class GammaDoc:
         self.doc.SetKey(doc_id)
         return doc_info['_id']
 
+    def create_items(self, table, doc_ids, docs):
+        if len(table.vec_infos) != 1 or len(table.field_infos) != 1:
+            return 1
+        for doc_id in doc_ids:
+            doc = Doc()
+            doc.SetKey(doc_id)
+            docs.AddDoc(doc)
+        return 0
+    
     def set_doc(self):
         for field in self.fields:
             if field.type == dataType.VECTOR:
@@ -1120,7 +1124,6 @@ class GammaResponse:
             query_results.append(query_result)    
         self.query_results = query_results
 
-
 class Engine:
     ''' vearch core
         It is used to store, update and delete feature vectors, 
@@ -1196,6 +1199,38 @@ class Engine:
                 print("gamma add cost %.4f s" % (time.time() - start))
                 start = time.time()
             for i in range(len(docs_info)):
+                if results.Code(i) == 0:
+                    self.total_added_num += 1
+        swigDeleteBatchResult(results)
+        if self.verbose:
+            print("finish add cost %.4f s" % (time.time() - start))
+        return doc_ids 
+    
+    def add2(self, data):
+        ''' add docs into table
+            data: raw vector
+            return: unique docs' id for docs
+        '''
+        if self.verbose:
+            start = time.time()
+        if not isinstance(data, np.ndarray):
+            ex = Exception('The add function takes an incorrect argument; it must be of a list type.')
+            raise ex
+        nb, d = data.shape
+        doc_ids = [self.create_id() for i in range(nb)]
+        docs = Docs()
+        doc = GammaDoc()
+        if doc.create_items(self.gamma_table, doc_ids, docs):
+            return []
+        results = swigCreateBatchResult(nb)
+        if self.verbose:
+            print("prepare add cost %.4f s" % (time.time() - start))
+            start = time.time()
+        if 0 == swigAddOrUpdateDocsCPP2(self.c_engine, docs, swig_ptr(data), results):
+            if self.verbose:
+                print("gamma add cost %.4f s" % (time.time() - start))
+                start = time.time()
+            for i in range(nb):
                 if results.Code(i) == 0:
                     self.total_added_num += 1
         swigDeleteBatchResult(results)
@@ -1330,6 +1365,45 @@ class Engine:
         if self.verbose:
             print("get results cost %f ms" %((time.time() - start) * 1000))
         return results
+   
+    def set_nprobe(self, nprobe):
+        swigSetNprobe(self.c_engine, nprobe, self.gamma_table.engine['retrieval_type'])
+
+    def set_rerank(self, rerank):
+        swigSetRerank(self.c_engine, rerank, self.gamma_table.engine['retrieval_type'])
+        
+    def search2(self, xq, k):
+        ''' search in table
+            xq: query data
+        '''
+        #if self.verbose:
+        #    start = time.time()
+        if not isinstance(xq, np.ndarray):
+            ex = Exception('The search2 function takes an incorrect argument; it must be of a list type.')
+            raise ex
+        # d should also check, TODO
+        if len(xq.shape) > 1:
+            n, d = xq.shape
+        elif len(xq.shape) == 1:
+            n = 1
+            d = xq.shape[0]
+        else:
+            return ()
+        distances = np.empty((n, k), dtype=np.float32)
+        labels = np.empty((n, k), dtype=np.int64)
+        result = swigCreateVectorResult(n, k, swig_ptr(distances), swig_ptr(labels))
+        result.query = swig_ptr(xq)
+        #if self.verbose:
+        #    print("prepare search cost %f ms" %((time.time() - start) * 1000))
+        #    start = time.time()
+        ret = swigSearchCPP2(self.c_engine, result) 
+        swigDeleteVectorResult(result)
+        #if self.verbose:
+        #    print("gamma search cost %f ms" %((time.time() - start) * 1000))
+        if ret:
+            return ()
+        else:
+            return distances, labels
     
     def del_doc_by_query(self, query_info):    
         ''' delete docs by query

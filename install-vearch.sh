@@ -17,11 +17,11 @@ if [ ${OS} == "Darwin" ];then
         pip install ${WHEEL}
     done            
 elif [ `expr substr ${OS} 1 5` == "Linux" ];then
-    for PYBIN in /opt/python/cp38-cp38/bin; do
+    for PYBIN in /opt/python/*/bin; do
         python_tag=$(echo ${PYBIN} | cut -d '/' -f4)
         "${PYBIN}/pip" uninstall vearch --yes
-        "${PYBIN}/pip" install "wheelhouse/vearch-$version-${python_tag}-manylinux_2_12_x86_64.manylinux2010_x86_64.whl"  
-         "${PYBIN}/python" -c "import vearch"
+        "${PYBIN}/pip" install "wheelhouse/vearch-${version}.3-${python_tag}-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+        "${PYBIN}/python" -c "import vearch"
     done
 elif [];then
     echo "Windows not support!!!"

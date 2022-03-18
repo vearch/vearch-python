@@ -5,6 +5,7 @@ from distutils.command.build_ext import build_ext
 from distutils.util import get_platform
 import os
 import sys
+import pathlib
 
 long_description="""
 Vearch is the vector search infrastructure for deeping learning and AI applications. 
@@ -85,7 +86,7 @@ _swigvearch = Extension(
 
 setup(
     name='vearch',
-    version='3.2.8',
+    version='3.2.8.3',
     description='A library for efficient similarity search and storage of deep learning vectors.',
     long_description=long_description,
     url='https://github.com/vearch/vearch',
@@ -98,7 +99,7 @@ setup(
         'build': CustomBuild,
         'build_ext': CustomBuildExt,
     },
-    install_requires=['numpy>=1.16.0', 'flatbuffers==1.12.0'],
+    install_requires=pathlib.Path("requirements.txt").read_text().splitlines(),
     package_dir={'vearch': 'python','vearch/gamma_api': 'python/gamma_api'},
     packages=['vearch','vearch.gamma_api'],
     ext_modules=[_swigvearch]
